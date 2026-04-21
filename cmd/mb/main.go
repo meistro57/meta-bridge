@@ -1,7 +1,8 @@
 // Command mb is the Meta Bridge CLI.
 //
 // Usage:
-//   mb ingest <path-to-pdf-or-txt>
+//
+//	mb ingest <path-to-pdf-or-txt>
 //
 // Wave 1: extract text, chunk it, run claim extraction, write JSON to ./output/.
 // No Qdrant, no dedup, no bridges. Just produce claims we can read and judge.
@@ -25,6 +26,7 @@ import (
 	"github.com/meistro57/meta-bridge/internal/extractor"
 	"github.com/meistro57/meta-bridge/internal/llm"
 	"github.com/meistro57/meta-bridge/internal/source"
+	"github.com/meistro57/meta-bridge/internal/store"
 )
 
 func main() {
@@ -62,8 +64,12 @@ Usage:
   mb ingest <path>       Extract claims from a PDF or text file
 
 Env:
-  OPENROUTER_API_KEY     required
-  MB_MODEL               override extraction model (default: deepseek/deepseek-r1)
+  OPENROUTER_API_KEY     required unless MB_MODEL starts with ollama:
+  OLLAMA_URL             local Ollama base URL (default: http://localhost:11434)
+  QDRANT_URL             Qdrant base URL (default: http://localhost:6333)
+  QDRANT_API_KEY         optional Qdrant API key
+  MB_MODEL               override extraction model (default: deepseek/deepseek-r1; local: ollama:gemma4)
+  MB_HEADER_PATTERN      optional regex for section headers (e.g. (?im)^\s*chapter\s+|(?im)^\s*session\s+)
   MB_MAX_CHUNKS          limit chunks processed (useful for dry runs)
   MB_OUTPUT_DIR          output directory (default: ./output)
   MB_SOURCE_ID           override auto-generated source ID
@@ -72,8 +78,9 @@ Env:
 }
 
 func cmdIngest(path string) error {
+	extractionModel := envOr("MB_MODEL", extractor.DefaultModel)
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
+	if apiKey == "" && !strings.HasPrefix(extractionModel, "ollama:") {
 		return fmt.Errorf("OPENROUTER_API_KEY not set (check .env or environment)")
 	}
 
@@ -90,18 +97,7 @@ func cmdIngest(path string) error {
 	}
 	log.Printf("      got %d characters (~%d tokens)", len(text), len(text)/4)
 
-	// --- 2. Chunk ---
-	log.Printf("[2/4] Chunking")
-	chunks := chunker.Chunk(text, chunker.DefaultOptions())
-	log.Printf("      produced %d chunks", len(chunks))
-
-	maxChunks := envInt("MB_MAX_CHUNKS", 0)
-	if maxChunks > 0 && maxChunks < len(chunks) {
-		log.Printf("      MB_MAX_CHUNKS=%d; limiting to first %d chunks", maxChunks, maxChunks)
-		chunks = chunks[:maxChunks]
-	}
-
-	// --- 3. Build Source record ---
+	// --- 2. Build Source record ---
 	baseName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	src := source.NewSource(
 		envOr("MB_SOURCE_ID", sanitizeID(baseName)),
@@ -109,35 +105,117 @@ func cmdIngest(path string) error {
 		envOr("MB_AUTHOR", "Unknown"),
 	)
 	src.SourcePath = path
+	src.HeaderPattern = os.Getenv("MB_HEADER_PATTERN")
+
+	// --- 3. Chunk ---
+	log.Printf("[2/4] Chunking")
+	chunkOpts := chunker.DefaultOptions()
+	chunkOpts.HeaderPattern = src.HeaderPattern
+	chunks := chunker.Split(text, chunkOpts)
+	log.Printf("      produced %d chunks", len(chunks))
+
+	maxChunks := envInt("MB_MAX_CHUNKS", 0)
+	if maxChunks > 0 && maxChunks < len(chunks) {
+		log.Printf("      MB_MAX_CHUNKS=%d; limiting to first %d chunks", maxChunks, maxChunks)
+		chunks = chunks[:maxChunks]
+	}
 	src.ChunkCount = len(chunks)
 
 	// --- 4. Extract claims chunk by chunk ---
-	log.Printf("[3/4] Extracting claims (model=%s)", envOr("MB_MODEL", extractor.DefaultModel))
+	log.Printf("[3/4] Extracting claims and indexing (model=%s)", extractionModel)
 	client := llm.NewClient(apiKey)
-	ex := extractor.New(client, envOr("MB_MODEL", ""))
+	client.SetOllamaURL(envOr("OLLAMA_URL", "http://localhost:11434"))
+	ex := extractor.New(client, extractionModel)
+	qdrantClient := store.NewClient(envOr("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY"))
 
 	ctx := context.Background()
 	var allClaims []claim.Claim
+	embedMaxChars := envInt("MB_EMBED_MAX_CHARS", 8000)
+	collectionsReady := false
+	ensureCollections := func(vector []float64) bool {
+		if collectionsReady {
+			return true
+		}
+		if err := qdrantClient.EnsureCollections(ctx, len(vector)); err != nil {
+			log.Printf("      ! qdrant collection init failed: %v", err)
+			return false
+		}
+		collectionsReady = true
+		return true
+	}
+
+	sourceVector, err := client.Embed(ctx, sourceEmbeddingText(src.Title, src.Author, text, embedMaxChars))
+	if err != nil {
+		log.Printf("      ! source embedding failed: %v", err)
+	} else if ensureCollections(sourceVector) {
+		if err := qdrantClient.UpsertSource(ctx, src, sourceVector); err != nil {
+			log.Printf("      ! source upsert failed: %v", err)
+		}
+	}
 
 	counter := 0
 	idFn := func() string {
 		counter++
 		return fmt.Sprintf("cl_%s_%04d", src.ID, counter)
 	}
+	loggedFirstClaimPayload := false
 
 	start := time.Now()
 	for i, ch := range chunks {
 		log.Printf("      chunk %d/%d (chapter=%q, ~%d tokens)",
 			i+1, len(chunks), ch.Chapter, ch.TokenEst)
+
+		chunkVector, err := client.Embed(ctx, truncateForEmbedding(ch.Text, embedMaxChars))
+		if err != nil {
+			log.Printf("      ! chunk embedding error on chunk %d: %v", i, err)
+		} else if ensureCollections(chunkVector) {
+			if err := qdrantClient.UpsertChunk(ctx, src.ID, ch, chunkVector); err != nil {
+				log.Printf("      ! chunk upsert error on chunk %d: %v", i, err)
+			}
+		}
+
 		claims, err := ex.ExtractChunk(ctx, src.ID, ch, idFn)
 		if err != nil {
-			// Don't abort the whole run; log and move on. Bad chunks are a data
-			// signal too (could indicate prompt issues or weird content).
 			log.Printf("      ! extraction error on chunk %d: %v", i, err)
 			continue
 		}
 		log.Printf("        -> %d claims", len(claims))
 		allClaims = append(allClaims, claims...)
+
+		for _, cl := range claims {
+			claimVector, err := client.Embed(ctx, cl.CanonicalStatement)
+			if err != nil {
+				log.Printf("      ! claim embedding error (%s): %v", cl.ID, err)
+				continue
+			}
+			if !ensureCollections(claimVector) {
+				continue
+			}
+
+			payload := map[string]interface{}{
+				"id":                  cl.ID,
+				"canonical_statement": cl.CanonicalStatement,
+				"tags":                cl.Tags,
+				"attributions":        cl.Attributions,
+				"editorial_status":    cl.EditorialStatus,
+			}
+			if cl.Notes != "" {
+				payload["notes"] = cl.Notes
+			}
+
+			if !loggedFirstClaimPayload {
+				if payloadJSON, err := json.Marshal(payload); err != nil {
+					log.Printf("      ! first claim payload marshal error (%s): %v", cl.ID, err)
+				} else {
+					log.Printf("      debug first claim payload: %s", string(payloadJSON))
+				}
+				loggedFirstClaimPayload = true
+			}
+
+			if err := qdrantClient.UpsertClaimPayload(ctx, cl.ID, payload, claimVector); err != nil {
+				log.Printf("      ! claim upsert error (%s): %v", cl.ID, err)
+			}
+		}
 	}
 	elapsed := time.Since(start)
 	src.ClaimCount = len(allClaims)
@@ -243,4 +321,20 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func sourceEmbeddingText(title, author, text string, maxChars int) string {
+	header := fmt.Sprintf("%s\n%s\n\n", title, author)
+	body := truncateForEmbedding(text, maxChars-len(header))
+	return header + body
+}
+
+func truncateForEmbedding(text string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	if len(text) <= maxChars {
+		return text
+	}
+	return text[:maxChars]
 }

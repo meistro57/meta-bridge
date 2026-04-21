@@ -1,6 +1,6 @@
 # env
 .env
-
+/venv
 # build artifacts
 /mb
 /meta-bridge

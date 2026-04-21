@@ -18,39 +18,48 @@ import (
 
 // Chunk is one contiguous passage from the source, ready for claim extraction.
 type Chunk struct {
-	Index    int    `json:"index"`           // 0-based, in source order
-	Chapter  string `json:"chapter"`         // e.g. "Chapter One" or "" if pre-TOC
+	Index    int    `json:"index"`   // 0-based, in source order
+	Chapter  string `json:"chapter"` // e.g. "Chapter One" or "" if pre-TOC
 	Text     string `json:"text"`
-	TokenEst int    `json:"token_est"`       // rough token estimate (chars/4)
+	TokenEst int    `json:"token_est"` // rough token estimate (chars/4)
 }
-
-// chapterHeading matches things like:
-//   "Chapter One"
-//   "Chapter 1:"
-//   "CHAPTER TWELVE"
-//   "Chapter Twelve"
-// It is intentionally permissive. False positives here are fine; chunks merely
-// get labeled with a wrong chapter name, which the cartographer can fix later.
-var chapterHeading = regexp.MustCompile(`(?m)^\s*(Chapter\s+[A-Za-z0-9-]+|CHAPTER\s+[A-Z0-9-]+)\b.*$`)
 
 // Options tune the chunker. Defaults target ~600 tokens per chunk.
 type Options struct {
-	TargetTokens int // soft target; chunks won't split mid-paragraph to hit it
-	MaxTokens    int // hard cap; a single paragraph larger than this becomes its own chunk
+	TargetTokens   int    // soft target; chunks won't split mid-paragraph to hit it
+	MaxTokens      int    // hard cap; a single paragraph larger than this becomes its own chunk
+	HeaderPattern  string // optional regex for section headers; if empty, no header detection
+	FallbackHeader string // default label before first matched header
 }
 
 // DefaultOptions returns sensible Wave 1 defaults.
 func DefaultOptions() Options {
 	return Options{
-		TargetTokens: 600,
-		MaxTokens:    1200,
+		TargetTokens:   600,
+		MaxTokens:      1200,
+		FallbackHeader: "General Content",
 	}
 }
 
-// Chunk splits raw text into chunks. Paragraphs are defined by blank lines.
-func Chunk(text string, opts Options) []Chunk {
+// Split splits raw text into chunks. Paragraphs are defined by blank lines.
+func Split(text string, opts Options) []Chunk {
+	def := DefaultOptions()
 	if opts.TargetTokens == 0 {
-		opts = DefaultOptions()
+		opts.TargetTokens = def.TargetTokens
+	}
+	if opts.MaxTokens == 0 {
+		opts.MaxTokens = def.MaxTokens
+	}
+	if strings.TrimSpace(opts.FallbackHeader) == "" {
+		opts.FallbackHeader = def.FallbackHeader
+	}
+
+	var headerRE *regexp.Regexp
+	if strings.TrimSpace(opts.HeaderPattern) != "" {
+		compiled, err := regexp.Compile(opts.HeaderPattern)
+		if err == nil {
+			headerRE = compiled
+		}
 	}
 
 	// Normalize line endings and collapse runs of blank lines to exactly one.
@@ -62,8 +71,8 @@ func Chunk(text string, opts Options) []Chunk {
 	var chunks []Chunk
 	var cur strings.Builder
 	var curTokens int
-	currentChapter := ""
-	chunkChapter := ""
+	currentChapter := opts.FallbackHeader
+	chunkChapter := opts.FallbackHeader
 	idx := 0
 
 	flush := func() {
@@ -82,14 +91,16 @@ func Chunk(text string, opts Options) []Chunk {
 	}
 
 	for _, p := range paragraphs {
-		// Chapter detection: if the paragraph IS a chapter heading, update the
-		// currentChapter and start a fresh chunk. The heading itself is not
-		// included in the chunk body (it's metadata).
-		if match := chapterHeading.FindString(p); match != "" && len(p) < 120 {
-			flush()
-			currentChapter = strings.TrimSpace(match)
-			chunkChapter = currentChapter
-			continue
+		// Header detection: if the paragraph IS a configured header, flush current
+		// content and start new chunks under the new header label.
+		if headerRE != nil {
+			trimmed := strings.TrimLeft(p, " \t")
+			if loc := headerRE.FindStringIndex(trimmed); loc != nil && loc[0] == 0 && len(trimmed) <= 120 {
+				flush()
+				currentChapter = strings.TrimSpace(trimmed[loc[0]:loc[1]])
+				chunkChapter = currentChapter
+				continue
+			}
 		}
 
 		pTokens := estimateTokens(p)
