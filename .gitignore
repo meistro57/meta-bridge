@@ -1,0 +1,20 @@
+# env
+.env
+
+# build artifacts
+/mb
+/meta-bridge
+*.exe
+
+# extraction output
+/output/
+
+# editor detritus
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# go
+/vendor/
