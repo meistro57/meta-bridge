@@ -8,8 +8,8 @@ from qdrant_client import QdrantClient
 QDRANT_URL = "http://localhost:6333"
 OLLAMA_URL = "http://localhost:11434"
 MODEL = "nomic-embed-text:latest"
-COLLECTION = "seth_speaks"
-QUERY = "What does Seth say about the nature of reality?"
+COLLECTION = "meta_test"
+QUERY = "Do different authors agree that thoughts create reality?"
 LIMIT = 5
 
 

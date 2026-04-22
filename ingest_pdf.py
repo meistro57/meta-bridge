@@ -65,6 +65,17 @@ def extract_pdf_pages(pdf_path: Path) -> List[Dict]:
     return pages
 
 
+def extract_txt_pages(txt_path: Path) -> List[Dict]:
+    """
+    Read a plain-text file as a single "page".
+    Returns a list with one dict so callers treat it identically to PDF pages.
+    """
+    text = normalize_text(txt_path.read_text(encoding="utf-8", errors="replace"))
+    if not text:
+        return []
+    return [{"page_number": 0, "text": text}]
+
+
 # -----------------------------
 # CHUNKING
 # -----------------------------
@@ -116,10 +127,13 @@ def build_chunk_records(
     source_label: str | None = None,
 ) -> List[Dict]:
     """
-    Build chunk records for one PDF.
+    Build chunk records for one PDF or TXT file.
     """
     label = source_label or pdf_path.name
-    pages = extract_pdf_pages(pdf_path)
+    if pdf_path.suffix.lower() == ".txt":
+        pages = extract_txt_pages(pdf_path)
+    else:
+        pages = extract_pdf_pages(pdf_path)
     records: List[Dict] = []
 
     for page in pages:
@@ -243,23 +257,29 @@ def upsert_records(
 # -----------------------------
 # FILE DISCOVERY
 # -----------------------------
-def iter_pdf_files(input_path: Path, recursive: bool) -> Iterable[Path]:
+SUPPORTED_EXTENSIONS = {".pdf", ".txt"}
+
+
+def iter_input_files(input_path: Path, recursive: bool) -> Iterable[Path]:
     """
-    Yield PDF files from a file path or folder path.
+    Yield PDF and TXT files from a file path or folder path.
     """
     if input_path.is_file():
-        if input_path.suffix.lower() != ".pdf":
-            raise ValueError(f"Input file is not a PDF: {input_path}")
+        if input_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise ValueError(f"Unsupported file type: {input_path}")
         yield input_path
         return
 
     if not input_path.is_dir():
         raise FileNotFoundError(f"Input path does not exist: {input_path}")
 
-    pattern = "**/*.pdf" if recursive else "*.pdf"
-    for pdf_path in sorted(input_path.glob(pattern)):
-        if pdf_path.is_file():
-            yield pdf_path
+    patterns = ["**/*.*"] if recursive else ["*.*"]
+    seen: set[Path] = set()
+    for pattern in patterns:
+        for p in sorted(input_path.glob(pattern)):
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS and p not in seen:
+                seen.add(p)
+                yield p
 
 
 # -----------------------------
@@ -279,13 +299,13 @@ def ingest_pdfs(
     """
     Ingest one PDF or a whole folder of PDFs into Qdrant.
     """
-    pdf_files = list(iter_pdf_files(input_path, recursive=recursive))
+    input_files = list(iter_input_files(input_path, recursive=recursive))
 
-    if not pdf_files:
-        print("No PDF files found.")
+    if not input_files:
+        print("No supported files found (pdf, txt).")
         return
 
-    print(f"Found {len(pdf_files)} PDF file(s)")
+    print(f"Found {len(input_files)} file(s)")
     print("Checking embedding vector size from Ollama...")
     vector_size = get_vector_size(ollama_url, model_name)
     print(f"Vector size: {vector_size}")
@@ -293,10 +313,10 @@ def ingest_pdfs(
     client = QdrantClient(url=qdrant_url)
     ensure_collection(client, collection_name, vector_size)
 
-    total_files = len(pdf_files)
+    total_files = len(input_files)
     total_chunks = 0
 
-    for index, pdf_path in enumerate(pdf_files, start=1):
+    for index, pdf_path in enumerate(input_files, start=1):
         print(f"\n[{index}/{total_files}] Processing: {pdf_path}")
         records = build_chunk_records(
             pdf_path=pdf_path,
@@ -306,7 +326,7 @@ def ingest_pdfs(
         )
 
         if not records:
-            print("  No extractable text found. This PDF may be scanned/image-only.")
+            print("  No extractable text found.")
             continue
 
         print(f"  Built {len(records)} chunks")
@@ -331,13 +351,13 @@ def ingest_pdfs(
 # -----------------------------
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Chunk PDF files, embed them with Ollama, and store them in Qdrant."
+        description="Chunk PDF/TXT files, embed them with Ollama, and store them in Qdrant."
     )
 
     parser.add_argument(
         "--input",
         required=True,
-        help="Path to a PDF file or a folder containing PDF files.",
+        help="Path to a PDF or TXT file, or a folder containing them.",
     )
     parser.add_argument(
         "--collection",
@@ -380,7 +400,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--recursive",
         action="store_true",
-        help="Recursively search subfolders for PDFs when input is a directory.",
+        help="Recursively search subfolders when input is a directory.",
     )
 
     return parser.parse_args()

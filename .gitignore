@@ -3,9 +3,10 @@
 /venv
 # build artifacts
 /mb
+/incoming
 /meta-bridge
 *.exe
-
+*.txt
 # extraction output
 /output/
 
@@ -15,6 +16,9 @@
 *.swp
 *.swo
 .DS_Store
-
+*.Identifier
 # go
 /vendor/
+
+# pdf
+*.pdf
