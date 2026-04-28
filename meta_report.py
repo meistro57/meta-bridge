@@ -1,11 +1,12 @@
 # meta_report.py
-# Generates a synthesis report from Qdrant results using Ollama
+# Generates a synthesis report from Qdrant results using configured providers
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import os
 import shutil
 import subprocess
 
@@ -13,12 +14,41 @@ import requests
 from qdrant_client import QdrantClient
 
 
+def load_env_file() -> None:
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file()
+
+
 # ---------------- CONFIG ----------------
-QDRANT_URL = "http://localhost:6333"
-OLLAMA_URL = "http://localhost:11434"
-EMBED_MODEL = "nomic-embed-text:latest"
-LLM_MODEL = "gemma3:latest"
-COLLECTION = "meta_test"  # overridden at runtime by select_collection()
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "").strip()
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+EMBED_PROVIDER = os.environ.get("MB_EMBED_PROVIDER", "openrouter").strip().lower()
+EMBED_MODEL = os.environ.get("MB_EMBED_MODEL", "openai/text-embedding-3-small")
+DEFAULT_REPORT_MODEL = "deepseek/deepseek-v4-flash"
+MODEL = (
+    os.environ.get("MB_REPORT_MODEL", "").strip()
+    or os.environ.get("MB_MODEL", "").strip()
+    or DEFAULT_REPORT_MODEL
+)
+COLLECTION = "mb_chunks"  # overridden at runtime by select_collection()
 QUERY = "Do different authors agree that thoughts create reality?"
 LIMIT = 8
 OUTPUT_FILE = "meta_report.txt"
@@ -45,11 +75,15 @@ def _collection_dim(client: QdrantClient, name: str) -> int | None:
     return None
 
 
+def qdrant_client() -> QdrantClient:
+    return QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
+
+
 def select_collection() -> str:
     print("Detecting embedding dimension...")
     dim = _embed_dim()
 
-    client = QdrantClient(url=QDRANT_URL)
+    client = qdrant_client()
     all_names = [c.name for c in client.get_collections().collections]
 
     compatible = [n for n in all_names if _collection_dim(client, n) == dim]
@@ -71,11 +105,30 @@ def select_collection() -> str:
 
 
 # ---------------- EMBEDDING ----------------
-def embed_query(text: str) -> list[float]:
-    """
-    Get an embedding vector for the query using Ollama.
-    Tries /api/embed first, then falls back to the older /api/embeddings shape.
-    """
+def openrouter_embed_query(text: str) -> list[float]:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is required for openrouter embeddings")
+
+    body = {"model": EMBED_MODEL, "input": text}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": "https://github.com/meistro57/meta-bridge",
+        "X-Title": "Meta Bridge",
+    }
+    resp = requests.post(OPENROUTER_EMBEDDINGS_URL, json=body, headers=headers, timeout=TIMEOUT_EMBED)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"openrouter embeddings {resp.status_code}: {resp.text}")
+    data = resp.json()
+    if data.get("error"):
+        raise RuntimeError(f"openrouter error: {data['error'].get('message', 'unknown error')}")
+    vectors = data.get("data") or []
+    if not vectors or not vectors[0].get("embedding"):
+        raise RuntimeError("openrouter returned empty embedding")
+    return vectors[0]["embedding"]
+
+
+def ollama_embed_query(text: str) -> list[float]:
     base = OLLAMA_URL.rstrip("/")
 
     try:
@@ -107,9 +160,17 @@ def embed_query(text: str) -> list[float]:
     return embedding
 
 
+def embed_query(text: str) -> list[float]:
+    if EMBED_PROVIDER == "openrouter":
+        return openrouter_embed_query(text)
+    if EMBED_PROVIDER == "ollama":
+        return ollama_embed_query(text)
+    raise RuntimeError("MB_EMBED_PROVIDER must be 'openrouter' or 'ollama'")
+
+
 # ---------------- RETRIEVAL ----------------
 def retrieve_chunks(query_vector: list[float]):
-    client = QdrantClient(url=QDRANT_URL)
+    client = qdrant_client()
 
     results = client.query_points(
         collection_name=COLLECTION,
@@ -164,14 +225,59 @@ RULES:
 
 
 # ---------------- GENERATION ----------------
-def generate_report_native(prompt: str) -> str:
-    """
-    Try Ollama's native /api/generate endpoint first.
-    """
+def openrouter_generate_report(prompt: str) -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is required for OpenRouter models")
+
+    body = {
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a careful synthesis assistant. Stay grounded in the provided context.",
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.2,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "HTTP-Referer": "https://github.com/meistro57/meta-bridge",
+        "X-Title": "Meta Bridge",
+    }
+
+    resp = requests.post(OPENROUTER_CHAT_URL, json=body, headers=headers, timeout=TIMEOUT_GENERATE)
+    if resp.status_code >= 400:
+        if resp.status_code == 400 and "not a valid model ID" in resp.text:
+            raise RuntimeError(
+                f"openrouter chat 400: model '{MODEL}' is invalid. "
+                f"Set MB_REPORT_MODEL to a valid OpenRouter model id (for example '{DEFAULT_REPORT_MODEL}')."
+            )
+        raise RuntimeError(f"openrouter chat {resp.status_code}: {resp.text}")
+    data = resp.json()
+    if data.get("error"):
+        raise RuntimeError(f"openrouter error: {data['error'].get('message', 'unknown error')}")
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"openrouter returned no choices: {data}")
+
+    message = choices[0].get("message") or {}
+    content = (message.get("content") or "").strip()
+    if not content:
+        raise RuntimeError(f"openrouter returned empty message: {data}")
+    return content
+
+
+def generate_report_native(prompt: str, ollama_model: str) -> str:
     r = requests.post(
         f"{OLLAMA_URL.rstrip('/')}/api/generate",
         json={
-            "model": LLM_MODEL,
+            "model": ollama_model,
             "prompt": prompt,
             "stream": False,
         },
@@ -187,15 +293,11 @@ def generate_report_native(prompt: str) -> str:
     return response_text
 
 
-
-def generate_report_chat(prompt: str) -> str:
-    """
-    Fallback to Ollama's native /api/chat endpoint.
-    """
+def generate_report_chat(prompt: str, ollama_model: str) -> str:
     r = requests.post(
         f"{OLLAMA_URL.rstrip('/')}/api/chat",
         json={
-            "model": LLM_MODEL,
+            "model": ollama_model,
             "messages": [
                 {
                     "role": "system",
@@ -221,18 +323,14 @@ def generate_report_chat(prompt: str) -> str:
     return content
 
 
-
-def generate_report_cli(prompt: str) -> str:
-    """
-    Final fallback: call the local Ollama CLI directly.
-    """
+def generate_report_cli(prompt: str, ollama_model: str) -> str:
     if shutil.which("ollama") is None:
         raise RuntimeError(
             "All HTTP generation endpoints failed and the 'ollama' CLI was not found in PATH."
         )
 
     proc = subprocess.run(
-        ["ollama", "run", LLM_MODEL, prompt],
+        ["ollama", "run", ollama_model, prompt],
         capture_output=True,
         text=True,
         timeout=TIMEOUT_GENERATE,
@@ -252,23 +350,8 @@ def generate_report_cli(prompt: str) -> str:
     return content
 
 
-
 def generate_report(prompt: str) -> str:
-    """
-    Try native generate, then native chat, then CLI fallback.
-    """
-    try:
-        return generate_report_native(prompt)
-    except Exception as exc:
-        print(f"Native /api/generate failed: {exc}")
-
-    try:
-        return generate_report_chat(prompt)
-    except Exception as exc:
-        print(f"Native /api/chat failed: {exc}")
-
-    print("Falling back to local 'ollama run' CLI...")
-    return generate_report_cli(prompt)
+    return openrouter_generate_report(prompt)
 
 
 # ---------------- SAVE ----------------
@@ -304,6 +387,16 @@ def save_report(text: str, chunks: list[Any]) -> None:
 # ---------------- MAIN ----------------
 def main() -> None:
     global COLLECTION
+
+    if EMBED_PROVIDER not in {"openrouter", "ollama"}:
+        raise RuntimeError("MB_EMBED_PROVIDER must be 'openrouter' or 'ollama'")
+
+    if EMBED_PROVIDER == "openrouter" and not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is required for openrouter embeddings")
+
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY is required for OpenRouter chat models")
+
     COLLECTION = select_collection()
     print(f"\nUsing collection: {COLLECTION}")
 
@@ -322,7 +415,7 @@ def main() -> None:
     print("Building synthesis prompt...")
     prompt = build_prompt(chunks)
 
-    print(f"Generating report with model: {LLM_MODEL}")
+    print(f"Generating report with model: {MODEL}")
     report = generate_report(prompt)
 
     save_report(report, chunks)

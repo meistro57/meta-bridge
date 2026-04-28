@@ -18,23 +18,29 @@ import (
 )
 
 const openRouterURL = "https://openrouter.ai/api/v1/chat/completions"
+const openRouterEmbeddingsURL = "https://openrouter.ai/api/v1/embeddings"
 const defaultOllamaURL = "http://localhost:11434"
-const defaultEmbeddingModel = "nomic-embed-text:latest"
+const defaultOllamaEmbeddingModel = "nomic-embed-text:latest"
+const defaultOpenRouterEmbeddingModel = "openai/text-embedding-3-small"
 
 // Client talks to OpenRouter.
 type Client struct {
-	apiKey    string
-	ollamaURL string
-	http      *http.Client
+	apiKey        string
+	ollamaURL     string
+	embedProvider string
+	embedModel    string
+	http          *http.Client
 }
 
 // NewClient constructs an OpenRouter client. Timeout is 120s by default to
 // accommodate reasoning models (DeepSeek R1) which can take a while.
 func NewClient(apiKey string) *Client {
 	return &Client{
-		apiKey:    apiKey,
-		ollamaURL: defaultOllamaURL,
-		http:      &http.Client{Timeout: 120 * time.Second},
+		apiKey:        apiKey,
+		ollamaURL:     defaultOllamaURL,
+		embedProvider: "ollama",
+		embedModel:    defaultOllamaEmbeddingModel,
+		http:          &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -43,6 +49,20 @@ func (c *Client) SetOllamaURL(url string) {
 		return
 	}
 	c.ollamaURL = strings.TrimRight(url, "/")
+}
+
+func (c *Client) SetEmbeddingProvider(provider string) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "openrouter" || provider == "ollama" {
+		c.embedProvider = provider
+	}
+}
+
+func (c *Client) SetEmbeddingModel(model string) {
+	model = strings.TrimSpace(model)
+	if model != "" {
+		c.embedModel = model
+	}
 }
 
 // Message is one chat turn.
@@ -206,9 +226,35 @@ type embeddingResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
 
+type openRouterEmbeddingsRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type openRouterEmbeddingsResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+	} `json:"data"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
 func (c *Client) Embed(ctx context.Context, text string) ([]float64, error) {
+	if c.embedProvider == "openrouter" {
+		return c.embedOpenRouter(ctx, text)
+	}
+	return c.embedOllama(ctx, text)
+}
+
+func (c *Client) embedOllama(ctx context.Context, text string) ([]float64, error) {
+	embedModel := c.embedModel
+	if strings.TrimSpace(embedModel) == "" {
+		embedModel = defaultOllamaEmbeddingModel
+	}
+
 	reqBody := embeddingRequest{
-		Model:  defaultEmbeddingModel,
+		Model:  embedModel,
 		Prompt: text,
 	}
 	body, err := json.Marshal(reqBody)
@@ -246,4 +292,60 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float64, error) {
 	}
 
 	return parsed.Embedding, nil
+}
+
+func (c *Client) embedOpenRouter(ctx context.Context, text string) ([]float64, error) {
+	if strings.TrimSpace(c.apiKey) == "" {
+		return nil, fmt.Errorf("OPENROUTER_API_KEY not set for openrouter embeddings")
+	}
+
+	embedModel := c.embedModel
+	if strings.TrimSpace(embedModel) == "" {
+		embedModel = defaultOpenRouterEmbeddingModel
+	}
+
+	reqBody := openRouterEmbeddingsRequest{
+		Model: embedModel,
+		Input: text,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal openrouter embedding request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", openRouterEmbeddingsURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("new openrouter embedding request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/meistro57/meta-bridge")
+	httpReq.Header.Set("X-Title", "Meta Bridge")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openrouter embedding http do: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read openrouter embedding body: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("openrouter %d: %s", resp.StatusCode, string(raw))
+	}
+
+	var parsed openRouterEmbeddingsResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("unmarshal openrouter embedding response: %w (body=%s)", err, string(raw))
+	}
+	if parsed.Error != nil {
+		return nil, fmt.Errorf("openrouter error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Data) == 0 || len(parsed.Data[0].Embedding) == 0 {
+		return nil, fmt.Errorf("openrouter returned empty embedding")
+	}
+
+	return parsed.Data[0].Embedding, nil
 }

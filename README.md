@@ -31,9 +31,9 @@ The pipeline chunks source texts, classifies segments, and runs LLM-driven claim
 - Go 1.22+
 - Python 3.10+ (for reflection and report scripts)
 - `pdftotext` (poppler-utils) on PATH
-- OpenRouter API key
+- OpenRouter API key (required when using OpenRouter chat and/or embeddings)
 - Qdrant instance (local or remote) — required from Wave 2 onward
-- Ollama with `gemma4` and `nomic-embed-text` models — for Python reflection passes
+- Ollama (required when using `ollama:` chat models and/or `MB_EMBED_PROVIDER=ollama`)
 
 ```bash
 sudo apt install poppler-utils
@@ -70,6 +70,18 @@ pip install -r requirements.txt   # qdrant-client, requests, etc.
 # Dry run: first 3 chunks only — sanity-check prompts before burning tokens
 MB_MAX_CHUNKS=3 ./mb ingest /path/to/oversoul7.pdf
 
+# OpenRouter Gemma extraction + OpenRouter embeddings (default embedding provider)
+MB_MODEL=google/gemma-4-31b-it \
+MB_EMBED_PROVIDER=openrouter \
+MB_EMBED_MODEL=openai/text-embedding-3-small \
+./mb ingest /path/to/source.pdf
+
+# Local Gemma 4 extraction + OpenRouter embeddings
+MB_MODEL=ollama:gemma4 \
+MB_EMBED_PROVIDER=openrouter \
+MB_EMBED_MODEL=openai/text-embedding-3-small \
+./mb ingest /path/to/source.pdf
+
 # Full run with source metadata
 MB_SOURCE_ID=roberts_oversoul7 \
 MB_TITLE="The Education of Oversoul Seven" \
@@ -88,12 +100,15 @@ Output lands in `./output/`:
 ### Python scripts — reflection and reporting
 
 ```bash
-# reflect.py — Gemma 4 passes over chunks in Qdrant and emits structured reflections
-# (summary, concepts, claims, tone, questions, echoes per chunk)
-python reflect.py                  # full run, resumes from last position
-python reflect.py --limit 20       # process first 20 new chunks only
-python reflect.py --workers 3      # concurrent Gemma calls (default 2)
-python reflect.py --from-scratch   # wipe meta_reflections and start over
+# reflect.py uses the same provider env vars as mb ingest:
+#   MB_MODEL (ollama:<model> or OpenRouter model id)
+#   MB_EMBED_PROVIDER (openrouter|ollama)
+#   MB_EMBED_MODEL
+python reflect.py                                         # full run, resumes
+python reflect.py --model ollama:gemma4:latest           # local Ollama chat
+python reflect.py --model google/gemma-4-31b-it          # OpenRouter chat
+MB_EMBED_PROVIDER=ollama MB_EMBED_MODEL=nomic-embed-text:latest python reflect.py
+python reflect.py --limit 20 --workers 3 --from-scratch
 
 # meta_report.py — synthesis report from Qdrant results via Ollama
 python meta_report.py
@@ -134,8 +149,17 @@ The full object schemas, bridge taxonomy, and query primitives are in [`ARCHITEC
 
 | Variable | Description |
 |----------|-------------|
-| `OPENROUTER_API_KEY` | Required. Used for LLM extraction passes. |
+| `OPENROUTER_API_KEY` | Required for OpenRouter extraction and/or embeddings. |
+| `OLLAMA_URL` | Ollama base URL (default: `http://localhost:11434`). |
+| `QDRANT_URL` | Qdrant base URL (default: `http://localhost:6333`). |
+| `QDRANT_API_KEY` | Optional Qdrant API key. |
+| `MB_MODEL` | Chat model selector used by `mb ingest` and `reflect.py` (`ollama:<model>` for Ollama, otherwise OpenRouter model id). |
+| `MB_EMBED_PROVIDER` | Embedding backend used by `mb ingest` and `reflect.py`: `openrouter` (default) or `ollama`. |
+| `MB_EMBED_MODEL` | Embedding model name used by `MB_EMBED_PROVIDER` (default: `openai/text-embedding-3-small`). |
+| `MB_EMBED_MAX_CHARS` | Max chars for source/chunk embedding payloads (default: `8000`). |
+| `MB_HEADER_PATTERN` | Optional regex override for chapter/session/part header detection (auto-detected by default). |
 | `MB_SOURCE_ID` | Stable ID for the source being ingested (e.g. `seth_speaks`). |
 | `MB_TITLE` | Source title. |
 | `MB_AUTHOR` | Human author/scribe. |
 | `MB_MAX_CHUNKS` | Limit extraction to first N chunks. Useful for prompt tuning. |
+| `MB_OUTPUT_DIR` | Output directory for `.source.json`, `.chunks.json`, `.claims.json` (default: `./output`). |

@@ -68,8 +68,10 @@ Env:
   OLLAMA_URL             local Ollama base URL (default: http://localhost:11434)
   QDRANT_URL             Qdrant base URL (default: http://localhost:6333)
   QDRANT_API_KEY         optional Qdrant API key
-  MB_MODEL               override extraction model (default: deepseek/deepseek-r1; local: ollama:gemma4)
-  MB_HEADER_PATTERN      optional regex for section headers (e.g. (?im)^\s*chapter\s+|(?im)^\s*session\s+)
+  MB_MODEL               override extraction model (default: google/gemma-4-31b-it; e.g. google/gemma-4-31b-it or ollama:gemma4)
+  MB_EMBED_PROVIDER      embedding backend: openrouter (default) or ollama
+  MB_EMBED_MODEL         embedding model (default: openai/text-embedding-3-small)
+  MB_HEADER_PATTERN      optional regex override for section headers (default auto-detects CHAPTER/SESSION/PART)
   MB_MAX_CHUNKS          limit chunks processed (useful for dry runs)
   MB_OUTPUT_DIR          output directory (default: ./output)
   MB_SOURCE_ID           override auto-generated source ID
@@ -79,8 +81,11 @@ Env:
 
 func cmdIngest(path string) error {
 	extractionModel := envOr("MB_MODEL", extractor.DefaultModel)
+	embedProvider := strings.ToLower(envOr("MB_EMBED_PROVIDER", "openrouter"))
+	embedModel := envOr("MB_EMBED_MODEL", "openai/text-embedding-3-small")
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" && !strings.HasPrefix(extractionModel, "ollama:") {
+	requiresOpenRouter := !strings.HasPrefix(extractionModel, "ollama:") || embedProvider == "openrouter"
+	if apiKey == "" && requiresOpenRouter {
 		return fmt.Errorf("OPENROUTER_API_KEY not set (check .env or environment)")
 	}
 
@@ -122,9 +127,11 @@ func cmdIngest(path string) error {
 	src.ChunkCount = len(chunks)
 
 	// --- 4. Extract claims chunk by chunk ---
-	log.Printf("[3/4] Extracting claims and indexing (model=%s)", extractionModel)
+	log.Printf("[3/4] Extracting claims and indexing (model=%s, embed_provider=%s, embed_model=%s)", extractionModel, embedProvider, embedModel)
 	client := llm.NewClient(apiKey)
 	client.SetOllamaURL(envOr("OLLAMA_URL", "http://localhost:11434"))
+	client.SetEmbeddingProvider(embedProvider)
+	client.SetEmbeddingModel(embedModel)
 	ex := extractor.New(client, extractionModel)
 	qdrantClient := store.NewClient(envOr("QDRANT_URL", "http://localhost:6333"), os.Getenv("QDRANT_API_KEY"))
 
@@ -201,6 +208,13 @@ func cmdIngest(path string) error {
 			}
 			if cl.Notes != "" {
 				payload["notes"] = cl.Notes
+			}
+			chapterNames := claimChapterNames(cl.Attributions)
+			if len(chapterNames) > 0 {
+				payload["chapter_names"] = chapterNames
+				if len(chapterNames) == 1 {
+					payload["chapter"] = chapterNames[0]
+				}
 			}
 
 			if !loggedFirstClaimPayload {
@@ -337,4 +351,27 @@ func truncateForEmbedding(text string, maxChars int) string {
 		return text
 	}
 	return text[:maxChars]
+}
+
+func claimChapterNames(attributions []claim.Attribution) []string {
+	if len(attributions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(attributions))
+	chapters := make([]string, 0, len(attributions))
+	for _, attr := range attributions {
+		chapter := strings.TrimSpace(attr.Chapter)
+		if chapter == "" {
+			continue
+		}
+		if _, exists := seen[chapter]; exists {
+			continue
+		}
+		seen[chapter] = struct{}{}
+		chapters = append(chapters, chapter)
+	}
+	if len(chapters) == 0 {
+		return nil
+	}
+	return chapters
 }

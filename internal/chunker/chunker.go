@@ -37,6 +37,7 @@ func DefaultOptions() Options {
 	return Options{
 		TargetTokens:   600,
 		MaxTokens:      1200,
+		HeaderPattern:  `(?im)^\s*((chapter|session)\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+|[ivxlcdm]+)(\b.*)?|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+|[ivxlcdm]+)(\b.*)?)\s*$`,
 		FallbackHeader: "General Content",
 	}
 }
@@ -52,6 +53,9 @@ func Split(text string, opts Options) []Chunk {
 	}
 	if strings.TrimSpace(opts.FallbackHeader) == "" {
 		opts.FallbackHeader = def.FallbackHeader
+	}
+	if strings.TrimSpace(opts.HeaderPattern) == "" {
+		opts.HeaderPattern = def.HeaderPattern
 	}
 
 	var headerRE *regexp.Regexp

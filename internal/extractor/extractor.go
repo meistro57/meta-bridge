@@ -18,8 +18,8 @@ import (
 )
 
 // Model is the OpenRouter model used for extraction.
-// DeepSeek R1 for reasoning; swap via env var if needed (see main.go).
-const DefaultModel = "deepseek/deepseek-r1"
+// Gemma 4 31B Instruct; swap via env var if needed (see main.go).
+const DefaultModel = "google/gemma-4-31b-it"
 
 // Extractor extracts claims from chunks.
 type Extractor struct {
