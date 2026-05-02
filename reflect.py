@@ -36,6 +36,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -138,17 +139,22 @@ def infer_embed_dim() -> int:
     return EMBED_DIM
 
 
-def resolve_source_collections() -> tuple[str, ...]:
-    configured = tuple(dict.fromkeys(SOURCE_COLLECTIONS))
+def list_available_collections() -> tuple[str, ...]:
     response = qdrant("GET", "/collections")
     if response.get("status") != "ok":
         raise RuntimeError(f"unable to list qdrant collections: {response}")
 
-    available = {
+    names = sorted(
         item.get("name")
         for item in response.get("result", {}).get("collections", [])
         if item.get("name")
-    }
+    )
+    return tuple(name for name in names if name)
+
+
+def resolve_source_collections(preferred: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    configured = tuple(dict.fromkeys(preferred or SOURCE_COLLECTIONS))
+    available = set(list_available_collections())
     selected = tuple(name for name in configured if name in available)
     if selected:
         return selected
@@ -158,6 +164,106 @@ def resolve_source_collections() -> tuple[str, ...]:
     raise RuntimeError(
         f"none of configured source collections exist ({configured_text}); available={available_text}"
     )
+
+
+def pick_source_collections(configured: tuple[str, ...]) -> tuple[str, ...]:
+    if not sys.stdin.isatty():
+        raise RuntimeError("--pick-collections requires an interactive terminal")
+
+    available = list(list_available_collections())
+    if not available:
+        raise RuntimeError("no collections found in qdrant")
+
+    print("[pick] available source collections:")
+    configured_set = set(configured)
+    for idx, name in enumerate(available, start=1):
+        marker = "*" if name in configured_set else " "
+        print(f"  {idx:>3}. [{marker}] {name}")
+
+    default_selection = [name for name in configured if name in configured_set]
+    print("[pick] choose by number, name, comma-list, or '*' for all")
+    raw = input("[pick] source collections (Enter for defaults): ").strip()
+
+    if not raw:
+        if default_selection:
+            return tuple(default_selection)
+        return (available[0],)
+
+    if raw in {"*", "all", "ALL"}:
+        return tuple(available)
+
+    chosen: list[str] = []
+    seen: set[str] = set()
+    available_set = set(available)
+
+    for token in (part.strip() for part in raw.split(",")):
+        if not token:
+            continue
+
+        name = ""
+        if token.isdigit():
+            idx = int(token)
+            if 1 <= idx <= len(available):
+                name = available[idx - 1]
+        elif token in available_set:
+            name = token
+
+        if not name:
+            raise RuntimeError(f"invalid source collection selection: {token}")
+        if name not in seen:
+            seen.add(name)
+            chosen.append(name)
+
+    if not chosen:
+        raise RuntimeError("no source collections selected")
+
+    return tuple(chosen)
+
+
+def pick_runtime_options(
+    model: str,
+    workers: int,
+    limit: int,
+    from_scratch: bool,
+    source_collections: tuple[str, ...],
+) -> tuple[str, int, int, bool, tuple[str, ...]]:
+    if not sys.stdin.isatty():
+        raise RuntimeError("--pick-collections requires an interactive terminal")
+
+    print("[pick] runtime options (Enter keeps current)")
+
+    raw_model = input(f"[pick] model [{model}]: ").strip()
+    if raw_model:
+        model = raw_model
+
+    raw_workers = input(f"[pick] workers [{workers}]: ").strip()
+    if raw_workers:
+        workers = int(raw_workers)
+
+    raw_limit = input(f"[pick] limit [{limit}] (0 means no limit): ").strip()
+    if raw_limit:
+        limit = int(raw_limit)
+
+    raw_scratch = input(
+        f"[pick] from-scratch [{'y' if from_scratch else 'n'}] (y/n): "
+    ).strip().lower()
+    if raw_scratch in {"y", "yes", "1", "true"}:
+        from_scratch = True
+    elif raw_scratch in {"n", "no", "0", "false"}:
+        from_scratch = False
+    elif raw_scratch:
+        raise RuntimeError(f"invalid from-scratch selection: {raw_scratch}")
+
+    source_collections = pick_source_collections(source_collections)
+
+    if workers < 1:
+        raise RuntimeError("workers must be >= 1")
+    if limit < 0:
+        raise RuntimeError("limit must be >= 0")
+    if not model.strip():
+        raise RuntimeError("model cannot be empty")
+
+    return model.strip(), workers, limit, from_scratch, source_collections
 
 
 def ensure_target_collection(from_scratch: bool) -> None:
@@ -206,6 +312,7 @@ def ensure_target_indexes() -> None:
         "source_point_id": "keyword",
         "source_collection": "keyword",
         "source_file": "keyword",
+        "source_id": "keyword",
         "page": "integer",
         "chunk_index": "integer",
         "tone": "keyword",
@@ -373,6 +480,7 @@ class Chunk:
     source_collection: str
     point_id: str
     source_file: str
+    source_id: str
     page: int
     chunk_index: int
     text: str
@@ -484,6 +592,7 @@ def upsert_reflection(chunk: Chunk, reflection: dict, vectors: dict[str, list[fl
         "source_point_id": chunk.point_id,
         "source_collection": chunk.source_collection,
         "source_file": chunk.source_file,
+        "source_id": chunk.source_id or (chunk.source_file if looks_like_source_id(chunk.source_file) else ""),
         "source_hash": hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
         "page": chunk.page,
         "chunk_index": chunk.chunk_index,
@@ -547,6 +656,9 @@ def chunk_text(payload: dict[str, Any]) -> str:
     return str(text).strip()
 
 
+SOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
 def source_file_name(payload: dict[str, Any], attr: dict[str, Any]) -> str:
     value = (
         payload.get("source_file")
@@ -561,7 +673,63 @@ def source_file_name(payload: dict[str, Any], attr: dict[str, Any]) -> str:
     return str(value)
 
 
-def iter_chunks(source_collections: tuple[str, ...], skip: set[tuple[str, str]]):
+def looks_like_source_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and " " not in text and SOURCE_ID_PATTERN.fullmatch(text) is not None
+
+
+def load_source_id_map() -> dict[str, str]:
+    source_ids: dict[str, str] = {}
+    try:
+        offset = None
+        while True:
+            page = scroll_source("mb_sources", offset)
+            for pt in page.get("points", []):
+                payload = pt.get("payload", {})
+                source_id = str(payload.get("id") or payload.get("source_id") or "").strip()
+                if not looks_like_source_id(source_id):
+                    continue
+                point_id = str(pt.get("id"))
+                source_ids[point_id] = source_id
+                source_ids[source_id] = source_id
+            offset = page.get("next_page_offset")
+            if not offset:
+                break
+    except RuntimeError:
+        return source_ids
+    return source_ids
+
+
+def resolve_chunk_source_id(
+    source_collection: str,
+    point_id: str,
+    payload: dict[str, Any],
+    attr: dict[str, Any],
+    source_file: str,
+    source_ids: dict[str, str],
+) -> str:
+    candidates = [
+        payload.get("source_id"),
+        attr.get("source_id"),
+        payload.get("id") if source_collection == "mb_sources" else None,
+        source_ids.get(point_id),
+        source_ids.get(str(payload.get("source_point_id") or "")),
+        source_file if looks_like_source_id(source_file) else None,
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if looks_like_source_id(text):
+            return text
+    return ""
+
+
+def iter_chunks(
+    source_collections: tuple[str, ...],
+    skip: set[tuple[str, str]],
+    source_ids: dict[str, str] | None = None,
+):
+    if source_ids is None:
+        source_ids = load_source_id_map()
     for source_collection in source_collections:
         offset = None
         while True:
@@ -575,10 +743,13 @@ def iter_chunks(source_collections: tuple[str, ...], skip: set[tuple[str, str]])
                 text = chunk_text(pl)
                 if not text:
                     continue
+                source_file = source_file_name(pl, attr)
+                source_id = resolve_chunk_source_id(source_collection, pid, pl, attr, source_file, source_ids)
                 yield Chunk(
                     source_collection=source_collection,
                     point_id=pid,
-                    source_file=source_file_name(pl, attr),
+                    source_file=source_file,
+                    source_id=source_id,
                     page=as_int(pl.get("page", pl.get("page_number", attr.get("page", 0)))),
                     chunk_index=as_int(pl.get("chunk_index", pl.get("index", attr.get("chunk_index", 0)))),
                     text=text,
@@ -595,12 +766,35 @@ def main() -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name (default: OpenRouter google/gemma-4-31b-it; override with ollama:<model>)")
     parser.add_argument("--limit", type=int, default=0, help="process at most N new chunks")
     parser.add_argument("--workers", type=int, default=2, help="concurrent model calls")
+    parser.add_argument("--source-collections", default="", help="comma-separated source collections")
+    parser.add_argument("--pick-collections", action="store_true", help="show interactive runtime + collection menu")
     parser.add_argument("--from-scratch", action="store_true", help="wipe target and restart")
     args = parser.parse_args()
 
     CURRENT_MODEL = args.model.strip()
     if not CURRENT_MODEL:
         raise RuntimeError("--model cannot be empty")
+    if args.workers < 1:
+        raise RuntimeError("--workers must be >= 1")
+    if args.limit < 0:
+        raise RuntimeError("--limit must be >= 0")
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    preferred_collections = tuple(
+        item.strip()
+        for item in args.source_collections.split(",")
+        if item.strip()
+    )
+    source_collections = resolve_source_collections(preferred_collections or None)
+    if args.pick_collections:
+        CURRENT_MODEL, args.workers, args.limit, args.from_scratch, source_collections = pick_runtime_options(
+            CURRENT_MODEL,
+            args.workers,
+            args.limit,
+            args.from_scratch,
+            source_collections,
+        )
 
     if EMBED_PROVIDER not in {"openrouter", "ollama"}:
         raise RuntimeError("MB_EMBED_PROVIDER must be 'openrouter' or 'ollama'")
@@ -610,9 +804,6 @@ def main() -> int:
     if requires_openrouter and not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is required for current model/provider configuration")
 
-    signal.signal(signal.SIGINT, handle_sigint)
-
-    source_collections = resolve_source_collections()
     embed_dim = infer_embed_dim()
 
     print(
@@ -646,7 +837,8 @@ def main() -> int:
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         in_flight = {}
-        chunks = iter_chunks(source_collections, skip)
+        source_ids = load_source_id_map()
+        chunks = iter_chunks(source_collections, skip, source_ids)
 
         def submit_next() -> bool:
             try:

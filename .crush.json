@@ -1,0 +1,16 @@
+{
+  "$schema": "https://charm.land/crush.json",
+  "mcp": {
+    "qdrant": {
+      "type": "stdio",
+      "command": "/usr/bin/python3",
+      "args": [
+        "/home/mark/meta-bridge/.crush/qdrant_mcp_server.py"
+      ],
+      "env": {
+        "QDRANT_URL": "http://localhost:6333/",
+        "COLLECTION_NAME": "meta-bridge-memory"
+      }
+    }
+  }
+}

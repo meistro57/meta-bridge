@@ -109,6 +109,12 @@ python reflect.py --model ollama:gemma4:latest           # local Ollama chat
 python reflect.py --model google/gemma-4-31b-it          # OpenRouter chat
 MB_EMBED_PROVIDER=ollama MB_EMBED_MODEL=nomic-embed-text:latest python reflect.py
 python reflect.py --limit 20 --workers 3 --from-scratch
+python reflect.py --source-collections mb_claims,mb_chunks
+python reflect.py --pick-collections                     # interactive menu: model/workers/limit/from-scratch/collections
+
+# reflect_loop.py — LangGraph loop runner
+python reflect_loop.py --limit 20
+python reflect_loop.py --loop-interval 60 --max-loops 0  # run forever on a timer
 
 # meta_report.py — synthesis report from Qdrant results via Ollama
 python meta_report.py
@@ -128,6 +134,7 @@ internal/
   extractor/         LLM-driven claim extraction
   store/             Qdrant persistence layer (Wave 2)
 reflect.py           Gemma 4 reflection pass over Qdrant chunks
+reflect_loop.py      Stateful/timer reflection loop runner
 meta_report.py       Synthesis report generator
 ```
 
