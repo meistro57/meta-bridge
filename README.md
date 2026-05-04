@@ -12,13 +12,13 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the full design — core objects,
 
 ## Status: Wave 1
 
-Current focus: **PDF in → JSON claims out.**
+Current focus: **PDF in → JSON claims out, with epistemic scoring of bridges.**
 
-The pipeline chunks source texts, classifies segments, and runs LLM-driven claim extraction. Output is human-readable JSON you can review before committing to the full schema. Qdrant storage, dedup, and bridge detection come in Wave 2.
+The pipeline chunks source texts (including academic/textbook PDFs), classifies segments, runs LLM-driven claim extraction, and scores resulting bridges through a Reality Filter for epistemic rigor. Qdrant storage and full bridge detection come in Wave 2.
 
 | Wave | Scope | Status |
 |------|-------|--------|
-| 1 | Schema validation — single source (*Oversoul Seven*) | **Active** |
+| 1 | Schema validation — single source (*Oversoul Seven*) + academic ingest harness | **Active** |
 | 2 | Doctrinal core — Seth Speaks, Nature of Personal Reality, Law of One | Planned |
 | 3 | Session-structured material — Cannon's Convoluted Universe v1–5 | Planned |
 | 4 | Breadth — Bashar, Pleiadian material, Cassiopaeans, ROOT ACCESS | Planned |
@@ -29,10 +29,10 @@ The pipeline chunks source texts, classifies segments, and runs LLM-driven claim
 ## Requirements
 
 - Go 1.22+
-- Python 3.10+ (for reflection and report scripts)
+- Python 3.10+ (for reflection, scoring, and report scripts)
 - `pdftotext` (poppler-utils) on PATH
 - OpenRouter API key (required when using OpenRouter chat and/or embeddings)
-- Qdrant instance (local or remote) — required from Wave 2 onward
+- Qdrant instance (local or remote) — required from Wave 2 onward; used now for reflection/report passes
 - Ollama (required when using `ollama:` chat models and/or `MB_EMBED_PROVIDER=ollama`)
 
 ```bash
@@ -57,7 +57,7 @@ For the Python scripts:
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt   # qdrant-client, requests, etc.
+pip install -r requirements.txt   # qdrant-client, requests, langgraph, etc.
 ```
 
 ---
@@ -97,6 +97,20 @@ Output lands in `./output/`:
 | `<source_id>.chunks.json` | All chunks with indices and type classifications |
 | `<source_id>.claims.json` | Extracted claims with attributions back to chunks |
 
+### Academic PDF ingestion
+
+For textbooks and section-numbered PDFs, use the academic chunker:
+
+```bash
+# Go harness (writes to live Qdrant collections: mb_chunks, mb_claims, mb_sources)
+go run ./cmd/mb-academic-test incoming/textbook.pdf
+
+# Python harness (writes to _test collections: mb_chunks_test, mb_sources_test only)
+python3 academic_ingest_test.py incoming/textbook.pdf
+```
+
+The academic chunker detects numbered section headers (`1.2.3 Title`), `Chapter N` headers, filters TOC lines and running page headers, and keeps equations grouped with surrounding prose.
+
 ### Python scripts — reflection and reporting
 
 ```bash
@@ -120,22 +134,67 @@ python reflect_loop.py --loop-interval 60 --max-loops 0  # run forever on a time
 python meta_report.py
 ```
 
+### Reality Filter — epistemic bridge scoring
+
+Classifies bridges between knowledge clusters with epistemic rigor, assigning each a `bridge_type`, `constraint_flags`, `testability_score`, and plain-language `epistemic_status`.
+
+```bash
+# Score all bridges in a vectoreology JSON report
+python scoring/reality_filter.py findings/vectoreology_2026-04-28.json
+
+# Dry run — print prompts without calling LLM
+python scoring/reality_filter.py --dry-run findings/vectoreology.json
+
+# Override model
+python scoring/reality_filter.py --model google/gemma-4-31b-it findings/vectoreology.json
+```
+
+Bridge types: `Structural | Analogical | Speculative | Testable | Contradictory`
+
+Epistemic statuses: `Established mapping | Plausible analogy | Suggestive but ungrounded | Poetic metaphor | Needs disambiguation | Likely invalid | Contradicted by evidence`
+
+Output is `<report>.scored.json` with per-bridge scores plus a summary block.
+
+### Utilities
+
+```bash
+# List all source IDs currently in Qdrant (mb_sources collection)
+python get_sources.py
+```
+
+### Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
 ---
 
 ## Layout
 
 ```
-cmd/mb/              CLI entry point
+cmd/
+  mb/                    CLI entry point (main pipeline)
+  mb-academic-test/      Academic PDF ingestion test harness (writes to live Qdrant)
 internal/
-  source/            Source object (a single ingested work)
-  chunker/           Text chunking — chapter/paragraph boundary detection
-  claim/             Claim + Attribution types
-  llm/               Minimal OpenRouter client
-  extractor/         LLM-driven claim extraction
-  store/             Qdrant persistence layer (Wave 2)
-reflect.py           Gemma 4 reflection pass over Qdrant chunks
-reflect_loop.py      Stateful/timer reflection loop runner
-meta_report.py       Synthesis report generator
+  source/                Source object (a single ingested work)
+  chunker/               Text chunking — chapter/paragraph + academic section detection
+  claim/                 Claim + Attribution types
+  llm/                   Minimal OpenRouter client
+  extractor/             LLM-driven claim extraction
+  store/                 Qdrant persistence layer (Wave 2)
+scoring/
+  reality_filter.py      Epistemic scoring of bridges (bridge type, flags, testability)
+  reality_filter_prompt.md  LLM rubric for the reality filter
+tests/
+  test_reality_filter.py Reality filter unit tests
+mcp/                     MCP server dependencies (qdrant, redis)
+reflect.py               Gemma 4 reflection pass over Qdrant chunks
+reflect_loop.py          LangGraph stateful/timer reflection loop runner
+meta_report.py           Synthesis report generator
+academic_ingest_test.py  Python academic ingest to Qdrant _test collections
+get_sources.py           List ingested source IDs from Qdrant
+reflect_failures/        Failed reflection JSON artifacts (for debugging)
 ```
 
 ---
@@ -147,6 +206,8 @@ meta_report.py       Synthesis report generator
 **Bridge** — a typed, scored link between two claims. Six types: Convergence, Dramatization, Translation, Evolution, Contradiction, Dependency. Bridges are the product; everything else is scaffolding.
 
 **Independence score** — how independent are the sources supporting a claim? Two sources in the same tradition, same decade, same channel type do not count as independent corroboration. The score is a function of tradition-diversity × region-diversity × decade-span × channel-type-diversity.
+
+**Reality Filter** — an epistemic scoring layer applied to bridges. It classifies each bridge's epistemic status and flags physics/logic constraint violations, ensuring the bridge catalog distinguishes structural mappings from speculative analogies.
 
 The full object schemas, bridge taxonomy, and query primitives are in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
@@ -161,6 +222,7 @@ The full object schemas, bridge taxonomy, and query primitives are in [`ARCHITEC
 | `QDRANT_URL` | Qdrant base URL (default: `http://localhost:6333`). |
 | `QDRANT_API_KEY` | Optional Qdrant API key. |
 | `MB_MODEL` | Chat model selector used by `mb ingest` and `reflect.py` (`ollama:<model>` for Ollama, otherwise OpenRouter model id). |
+| `MB_FILTER_MODEL` | Override model for `scoring/reality_filter.py` (falls back to `MB_MODEL`). |
 | `MB_EMBED_PROVIDER` | Embedding backend used by `mb ingest` and `reflect.py`: `openrouter` (default) or `ollama`. |
 | `MB_EMBED_MODEL` | Embedding model name used by `MB_EMBED_PROVIDER` (default: `openai/text-embedding-3-small`). |
 | `MB_EMBED_MAX_CHARS` | Max chars for source/chunk embedding payloads (default: `8000`). |
