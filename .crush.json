@@ -3,14 +3,22 @@
   "mcp": {
     "qdrant": {
       "type": "stdio",
-      "command": "/usr/bin/python3",
+      "command": "/home/mark/meta-bridge/mcp/venv/bin/python",
       "args": [
         "/home/mark/meta-bridge/.crush/qdrant_mcp_server.py"
       ],
       "env": {
-        "QDRANT_URL": "http://localhost:6333/",
-        "COLLECTION_NAME": "meta-bridge-memory"
+        "QDRANT_URL": "http://localhost:6333/"
       }
+    },
+    "redis": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-redis",
+        "redis://localhost:6379"
+      ]
     }
   }
 }

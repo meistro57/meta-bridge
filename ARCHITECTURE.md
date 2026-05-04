@@ -109,6 +109,21 @@ Bridges are the product. Everything else is scaffolding for the bridges.
 
 ---
 
+## Reality Filter
+
+After bridge detection, every bridge passes through the Reality Filter — an LLM-scored epistemic layer that prevents "vibes convergence" from polluting the catalog.
+
+Each bridge receives:
+
+- `bridge_type` — `Structural` (formal isomorphism between systems), `Analogical` (useful metaphor, not claimed identity), `Speculative` (plausible but ungrounded), `Testable` (yields specific empirical predictions), or `Contradictory` (claims are mutually exclusive).
+- `constraint_flags` — list of physics or logic concerns: `no-communication-theorem`, `decoherence-scale-gap`, `measurement-problem-conflation`, `energy-conservation-violation`, `unfalsifiable`, `equivocation`, `category-error`.
+- `testability_score` — 0–5 integer (0 = not testable, 5 = clear empirical prediction with established methodology).
+- `epistemic_status` — plain-language label for the catalog: `Established mapping`, `Plausible analogy`, `Suggestive but ungrounded`, `Poetic metaphor`, `Needs disambiguation`, `Likely invalid`, or `Contradicted by evidence`.
+
+The Reality Filter makes it possible to navigate the catalog honestly: Structural and Testable bridges are the high-signal output; Speculative and Poetic bridges are still shown but clearly labeled.
+
+---
+
 ## Bridge Taxonomy
 
 Six bridge types, each with its own strength metric and its own detector.
@@ -165,7 +180,7 @@ One claim logically requires or presupposes another.
 
 ## Ingest Pipeline
 
-Five stages. Human-in-the-loop checkpoints at stages 3 and 5.
+Six stages. Human-in-the-loop checkpoints at stages 3 and 6.
 
 ```
   raw text
@@ -173,8 +188,14 @@ Five stages. Human-in-the-loop checkpoints at stages 3 and 5.
      ▼
  ┌─────────────────────────────────────┐
  │ STAGE 1: STRUCTURAL CHUNKING        │
- │   - parse by chapter / session /    │
- │     scene boundaries                │
+ │   - narrative PDFs: parse by        │
+ │     chapter / session / scene       │
+ │   - academic/textbook PDFs:         │
+ │     SplitAcademic() detects         │
+ │     numbered section headers        │
+ │     (e.g., "1.2.3 Title"), filters  │
+ │     TOC lines and running headers,  │
+ │     groups equations with prose     │
  │   - classify chunks by type:        │
  │     framing | dialogue | doctrine   │
  │     | narrative | biographical      │
@@ -213,9 +234,28 @@ Five stages. Human-in-the-loop checkpoints at stages 3 and 5.
  └────────────────┬────────────────────┘
                   ▼
  ┌─────────────────────────────────────┐
- │ STAGE 5: CARTOGRAPHER REVIEW ⚑      │
+ │ STAGE 5: REALITY FILTER             │
+ │   - epistemic scoring of each       │
+ │     bridge via LLM rubric           │
+ │   - assigns bridge_type:            │
+ │     Structural | Analogical |       │
+ │     Speculative | Testable |        │
+ │     Contradictory                   │
+ │   - flags physics/logic constraint  │
+ │     violations (no-communication-   │
+ │     theorem, decoherence-scale-gap, │
+ │     energy-conservation-violation,  │
+ │     equivocation, category-error,   │
+ │     unfalsifiable, …)               │
+ │   - assigns testability_score 0–5   │
+ │   - assigns plain-language          │
+ │     epistemic_status                │
+ └────────────────┬────────────────────┘
+                  ▼
+ ┌─────────────────────────────────────┐
+ │ STAGE 6: CARTOGRAPHER REVIEW ⚑      │
  │   - surface new/changed bridges     │
- │     and low-confidence claims       │
+ │     with epistemic scores attached  │
  │   - human confirms, rejects,        │
  │     edits, or annotates             │
  │   - confirmed state persists        │
@@ -287,9 +327,12 @@ Built on the KAE Lens SSE scaffolding. Live-updating as pipeline stages complete
 Deliberately matches the KAE stack so infrastructure is shared and familiar:
 
 - **Language:** Go (primary), with Python for specific LLM-heavy passes if library support matters.
-- **Vector store:** Qdrant. Collections: `mb_sources`, `mb_chunks`, `mb_claims`, `mb_bridges`.
-- **LLM:** OpenRouter. DeepSeek R1 for reasoning passes (dedup judgment, entailment, contradiction detection). Gemini Flash for bulk extraction and classification.
+- **Vector store:** Qdrant. Collections: `mb_sources`, `mb_chunks`, `mb_claims`, `mb_bridges`. Test collections use `_test` suffix; the reflection loop uses `meta_reflection_loop_test`.
+- **LLM:** OpenRouter. DeepSeek R1 for reasoning passes (dedup judgment, entailment, contradiction detection). Gemini Flash for bulk extraction and classification. Gemma 4 for reflection and reality filter scoring.
 - **Local LLM fallback:** Ollama with Qwen2.5-Coder:32b on the BOXX, for passes where API cost is an issue at scale.
+- **Reflection loop:** LangGraph (`reflect_loop.py`) drives a stateful multi-iteration reflection pass. Distinct from the one-shot `reflect.py` batch pass — useful for goal-directed hunts (e.g., "find contradictions") without modifying stable collections.
+- **Epistemic scoring:** `scoring/reality_filter.py` — standalone tool that classifies bridges from vectoreology JSON reports. Reads the rubric from `scoring/reality_filter_prompt.md`. Controlled by `MB_FILTER_MODEL` (falls back to `MB_MODEL`).
+- **MCP integrations:** Qdrant and Redis MCP servers configured in `.crush.json` for interactive use.
 - **UI:** Bubbletea/Lipgloss TUI for the headless/batch-mode cartographer's desk; separate SSE web dashboard (pattern from KAE Lens) for bridge feed and claim browsing.
 - **Config:** same env-based config pattern as Chat Bridge and KAE.
 - **Deployment:** Pop!_OS server, Docker, Qdrant instance potentially shared with KAE or separate (decide at Wave 2 based on load).
