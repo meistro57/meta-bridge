@@ -53,7 +53,7 @@ except ImportError:
 import reflect as rf
 
 
-DEFAULT_TARGET_COLLECTION = "meta_reflection"
+DEFAULT_TARGET_COLLECTION = "meta_reflections"
 
 
 class LoopState(TypedDict, total=False):
