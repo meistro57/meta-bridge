@@ -106,6 +106,16 @@ func Split(text string, opts Options) []Chunk {
 				continue
 			}
 		}
+		// Fallback: detect ALL-CAPS title-style headers (e.g., "BUNDLING AND
+		// MARRIAGE CUSTOMS ARE INTERESTING AND UNIQUE"). Common in older
+		// public-domain texts (sacred-texts.com, Project Gutenberg) that don't
+		// use "Chapter N" formatting.
+		if isAllCapsHeader(p) {
+			flush()
+			currentChapter = strings.TrimSpace(p)
+			chunkChapter = currentChapter
+			continue
+		}
 
 		pTokens := estimateTokens(p)
 
@@ -154,4 +164,42 @@ func splitParagraphs(text string) []string {
 // We will swap to a real tokenizer when it matters. It does not matter yet.
 func estimateTokens(s string) int {
 	return len(s) / 4
+}
+
+// isAllCapsHeader reports whether p looks like an all-caps section title on
+// its own line — multi-word, no lowercase letters, length 8–120, mostly
+// alphabetic. Used as a fallback when the configured header regex misses
+// (common in old public-domain books that don't say "Chapter N").
+func isAllCapsHeader(p string) bool {
+	trimmed := strings.TrimSpace(p)
+	if strings.ContainsRune(trimmed, '\n') {
+		return false
+	}
+	n := len(trimmed)
+	if n < 8 || n > 120 {
+		return false
+	}
+	letters := 0
+	spaces := 0
+	for _, r := range trimmed {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			letters++
+		case r >= 'a' && r <= 'z':
+			return false
+		case r == ' ':
+			spaces++
+		case r >= '0' && r <= '9':
+			// allow digits
+		case strings.ContainsRune(`-'".,&()!?:;`, r):
+			// allow common header punctuation
+		default:
+			return false
+		}
+	}
+	// Require multiple words and a meaningful share of letters.
+	if spaces < 1 || letters < 6 {
+		return false
+	}
+	return true
 }
