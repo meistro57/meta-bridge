@@ -1,4 +1,5 @@
 # meta-bridge
+<img width="630" height="600" alt="image" src="https://github.com/user-attachments/assets/b4dcacb3-4b64-43d8-a16b-e319ac38bc8d" />
 
 > **Synthesis engine for consciousness literature.**
 
