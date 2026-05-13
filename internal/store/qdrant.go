@@ -94,6 +94,14 @@ func (c *Client) UpsertChunk(ctx context.Context, sourceID string, ch chunker.Ch
 	}
 	payload["entity_type"] = "chunk"
 	payload["source_id"] = sourceID
+	// Mirror chapter as chapter_title for receipts pipeline compatibility.
+	if ch.Chapter != "" {
+		payload["chapter_title"] = ch.Chapter
+	}
+	// Ensure book_title is always present.
+	if ch.BookTitle != "" {
+		payload["book_title"] = ch.BookTitle
+	}
 
 	return c.upsertPoint(ctx, CollectionChunks, Point{
 		ID:      pointIDForKey(chunkPointKey(sourceID, ch.Index)),

@@ -83,7 +83,7 @@ SOURCE_COLLECTIONS = tuple(
 TARGET_COLLECTION = "meta_reflections"
 EMBED_PROVIDER = os.environ.get("MB_EMBED_PROVIDER", "openrouter").strip().lower()
 EMBED_MODEL = os.environ.get("MB_EMBED_MODEL", "nomic-embed-text:latest")
-DEFAULT_MODEL = "google/gemma-4-31b-it"
+DEFAULT_MODEL = os.environ.get("MB_MODEL", "google/gemma-4-31b-it").strip() or "google/gemma-4-31b-it"
 SCHEMA_VERSION = "2"
 PROMPT_VERSION = "1"
 SUMMARY_VECTOR_NAME = "summary_vec"
@@ -376,6 +376,20 @@ def complete(model: str, prompt: str, system: str) -> str:
     return openrouter_chat(model, prompt, system)
 
 
+def openrouter_model_matches(requested: str, actual: str) -> bool:
+    req = requested.strip().lower()
+    got = actual.strip().lower()
+    if not req or not got:
+        return True
+    if req == got:
+        return True
+    if got.startswith(req + "-") or got.startswith(req + ":"):
+        return True
+    if req.startswith(got + "-") or req.startswith(got + ":"):
+        return True
+    return False
+
+
 def openrouter_chat(model: str, prompt: str, system: str) -> str:
     if not OPENROUTER_API_KEY:
         raise RuntimeError("OPENROUTER_API_KEY is required for OpenRouter models")
@@ -401,6 +415,11 @@ def openrouter_chat(model: str, prompt: str, system: str) -> str:
     data = resp.json()
     if data.get("error"):
         raise RuntimeError(f"openrouter error: {data['error'].get('message', 'unknown error')}")
+    actual_model = str(data.get("model") or "").strip()
+    if actual_model and not openrouter_model_matches(model, actual_model):
+        raise RuntimeError(
+            f"openrouter model mismatch: requested={model} actual={actual_model}; use a valid OpenRouter model ID"
+        )
     choices = data.get("choices") or []
     if not choices:
         raise RuntimeError(f"openrouter returned no choices: {data}")
@@ -481,6 +500,8 @@ class Chunk:
     point_id: str
     source_file: str
     source_id: str
+    book_title: str
+    chapter_title: str
     page: int
     chunk_index: int
     text: str
@@ -593,6 +614,8 @@ def upsert_reflection(chunk: Chunk, reflection: dict, vectors: dict[str, list[fl
         "source_collection": chunk.source_collection,
         "source_file": chunk.source_file,
         "source_id": chunk.source_id or (chunk.source_file if looks_like_source_id(chunk.source_file) else ""),
+        "book_title": chunk.book_title,
+        "chapter_title": chunk.chapter_title,
         "source_hash": hashlib.sha256(chunk.text.encode("utf-8")).hexdigest(),
         "page": chunk.page,
         "chunk_index": chunk.chunk_index,
@@ -660,14 +683,14 @@ SOURCE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def source_file_name(payload: dict[str, Any], attr: dict[str, Any]) -> str:
+    # Prefer stable file/source identifiers — never fall through to chapter titles
+    # which are content headers, not source names.
     value = (
         payload.get("source_file")
         or payload.get("source_id")
         or payload.get("document_id")
-        or payload.get("title")
-        or payload.get("chapter")
+        or payload.get("book_title")
         or attr.get("source_id")
-        or attr.get("chapter")
         or "unknown"
     )
     return str(value)
@@ -750,6 +773,8 @@ def iter_chunks(
                     point_id=pid,
                     source_file=source_file,
                     source_id=source_id,
+                    book_title=str(pl.get("book_title") or "").strip(),
+                    chapter_title=str(pl.get("chapter_title") or "").strip(),
                     page=as_int(pl.get("page", pl.get("page_number", attr.get("page", 0)))),
                     chunk_index=as_int(pl.get("chunk_index", pl.get("index", attr.get("chunk_index", 0)))),
                     text=text,

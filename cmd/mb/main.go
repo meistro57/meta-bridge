@@ -119,6 +119,12 @@ func cmdIngest(path string) error {
 	chunks := chunker.Split(text, chunkOpts)
 	log.Printf("      produced %d chunks", len(chunks))
 
+	// Stamp each chunk with provenance fields so they survive in Qdrant payload.
+	for i := range chunks {
+		chunks[i].BookTitle = src.Title
+		chunks[i].SourceID = src.ID
+	}
+
 	maxChunks := envInt("MB_MAX_CHUNKS", 0)
 	if maxChunks > 0 && maxChunks < len(chunks) {
 		log.Printf("      MB_MAX_CHUNKS=%d; limiting to first %d chunks", maxChunks, maxChunks)

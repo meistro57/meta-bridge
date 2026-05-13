@@ -340,6 +340,7 @@ def render_bridge_table(scored_bridges: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def main():
+    global MODEL
     import argparse
 
     parser = argparse.ArgumentParser(description="Reality Filter v0 for Meta Bridge bridges")
@@ -350,7 +351,6 @@ def main():
     args = parser.parse_args()
 
     if args.model:
-        global MODEL
         MODEL = args.model
 
     if not args.report:

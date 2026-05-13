@@ -18,10 +18,13 @@ import (
 
 // Chunk is one contiguous passage from the source, ready for claim extraction.
 type Chunk struct {
-	Index    int    `json:"index"`   // 0-based, in source order
-	Chapter  string `json:"chapter"` // e.g. "Chapter One" or "" if pre-TOC
-	Text     string `json:"text"`
-	TokenEst int    `json:"token_est"` // rough token estimate (chars/4)
+	Index     int    `json:"index"`      // 0-based, in source order
+	Chapter   string `json:"chapter"`    // e.g. "Chapter One" or "" if pre-TOC
+	BookTitle string `json:"book_title"` // human-readable title of the source
+	SourceID  string `json:"source_id"`  // snake_case stable identifier
+	Page      int    `json:"page"`       // page number if known, else 0
+	Text      string `json:"text"`
+	TokenEst  int    `json:"token_est"` // rough token estimate (chars/4)
 }
 
 // Options tune the chunker. Defaults target ~600 tokens per chunk.
@@ -94,9 +97,9 @@ func Split(text string, opts Options) []Chunk {
 		curTokens = 0
 	}
 
-	for _, p := range paragraphs {
-		// Header detection: if the paragraph IS a configured header, flush current
-		// content and start new chunks under the new header label.
+	for i, p := range paragraphs {
+		// ── Regex header detection ────────────────────────────────────────────
+		// Matches "Chapter 1", "Session IV", "Part Two", etc.
 		if headerRE != nil {
 			trimmed := strings.TrimLeft(p, " \t")
 			if loc := headerRE.FindStringIndex(trimmed); loc != nil && loc[0] == 0 && len(trimmed) <= 120 {
@@ -106,10 +109,30 @@ func Split(text string, opts Options) []Chunk {
 				continue
 			}
 		}
-		// Fallback: detect ALL-CAPS title-style headers (e.g., "BUNDLING AND
-		// MARRIAGE CUSTOMS ARE INTERESTING AND UNIQUE"). Common in older
-		// public-domain texts (sacred-texts.com, Project Gutenberg) that don't
-		// use "Chapter N" formatting.
+
+		// ── Split-line chapter detection ──────────────────────────────────────
+		// Dolores Cannon PDFs (and others) often render the section keyword
+		// alone on one paragraph and the title on the next, e.g.:
+		//   "Chapter"
+		//   "Message from a Guide"
+		// Detect that pattern and combine into a single chapter label.
+		if isSectionKeywordOnly(p) && i+1 < len(paragraphs) {
+			nextP := strings.TrimSpace(paragraphs[i+1])
+			if isTitleLine(nextP) {
+				flush()
+				currentChapter = strings.TrimSpace(p) + " — " + nextP
+				chunkChapter = currentChapter
+				continue
+			}
+		}
+
+		// Skip paragraph already consumed as the title in split-line detection.
+		if i > 0 && isSectionKeywordOnly(paragraphs[i-1]) && isTitleLine(p) {
+			continue
+		}
+
+		// ── All-caps fallback header ──────────────────────────────────────────
+		// Common in older public-domain texts (Project Gutenberg, sacred-texts).
 		if isAllCapsHeader(p) {
 			flush()
 			currentChapter = strings.TrimSpace(p)
@@ -128,8 +151,7 @@ func Split(text string, opts Options) []Chunk {
 			continue
 		}
 
-		// If adding this paragraph would exceed the target AND we already have
-		// content, flush first.
+		// Flush if adding this paragraph would exceed the target.
 		if curTokens+pTokens > opts.TargetTokens && cur.Len() > 0 {
 			flush()
 		}
@@ -160,16 +182,48 @@ func splitParagraphs(text string) []string {
 	return out
 }
 
-// estimateTokens is a rough char/4 heuristic. Good enough for budgeting.
-// We will swap to a real tokenizer when it matters. It does not matter yet.
+// estimateTokens is a rough char/4 heuristic.
 func estimateTokens(s string) int {
 	return len(s) / 4
 }
 
-// isAllCapsHeader reports whether p looks like an all-caps section title on
-// its own line — multi-word, no lowercase letters, length 8–120, mostly
-// alphabetic. Used as a fallback when the configured header regex misses
-// (common in old public-domain books that don't say "Chapter N").
+// isSectionKeywordOnly returns true if p is solely a section keyword like
+// "Chapter", "Session", or "Part" — the split-line pattern common in
+// Dolores Cannon PDFs where keyword and title land in separate paragraphs.
+func isSectionKeywordOnly(p string) bool {
+	trimmed := strings.TrimSpace(p)
+	if strings.ContainsRune(trimmed, '\n') {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return lower == "chapter" || lower == "session" || lower == "part" ||
+		lower == "section" || lower == "book" || lower == "appendix"
+}
+
+// isTitleLine returns true if p looks like a chapter title:
+// single line, reasonable length, not a bare page number or footer.
+func isTitleLine(p string) bool {
+	trimmed := strings.TrimSpace(p)
+	if strings.ContainsRune(trimmed, '\n') {
+		return false
+	}
+	n := len(trimmed)
+	if n < 3 || n > 100 {
+		return false
+	}
+	// Reject bare page numbers / roman numerals.
+	if regexp.MustCompile(`^[\divxlcdmIVXLCDM]+$`).MatchString(trimmed) {
+		return false
+	}
+	// Reject footer patterns like "Conversations with Nostradamus (VOL. I)".
+	if regexp.MustCompile(`(?i)\(vol\.?\s*[ivx\d]+\)`).MatchString(trimmed) {
+		return false
+	}
+	return true
+}
+
+// isAllCapsHeader reports whether p looks like an all-caps section title.
+// Common in older public-domain texts that don't use "Chapter N" formatting.
 func isAllCapsHeader(p string) bool {
 	trimmed := strings.TrimSpace(p)
 	if strings.ContainsRune(trimmed, '\n') {
@@ -197,7 +251,6 @@ func isAllCapsHeader(p string) bool {
 			return false
 		}
 	}
-	// Require multiple words and a meaningful share of letters.
 	if spaces < 1 || letters < 6 {
 		return false
 	}
