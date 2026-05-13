@@ -87,6 +87,7 @@ type ResponseFormat struct {
 
 // Response is the subset of the OpenRouter response we care about.
 type Response struct {
+	Model   string `json:"model,omitempty"`
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
@@ -102,6 +103,24 @@ func (c *Client) Complete(ctx context.Context, req Request) (string, error) {
 		return c.completeOllama(ctx, req)
 	}
 	return c.completeOpenRouter(ctx, req)
+}
+
+func openRouterModelMatches(requested, actual string) bool {
+	req := strings.ToLower(strings.TrimSpace(requested))
+	got := strings.ToLower(strings.TrimSpace(actual))
+	if req == "" || got == "" {
+		return true
+	}
+	if req == got {
+		return true
+	}
+	if strings.HasPrefix(got, req+"-") || strings.HasPrefix(got, req+":") {
+		return true
+	}
+	if strings.HasPrefix(req, got+"-") || strings.HasPrefix(req, got+":") {
+		return true
+	}
+	return false
 }
 
 func (c *Client) completeOpenRouter(ctx context.Context, req Request) (string, error) {
@@ -140,6 +159,9 @@ func (c *Client) completeOpenRouter(ctx context.Context, req Request) (string, e
 	}
 	if parsed.Error != nil {
 		return "", fmt.Errorf("openrouter error: %s", parsed.Error.Message)
+	}
+	if !openRouterModelMatches(req.Model, parsed.Model) {
+		return "", fmt.Errorf("openrouter model mismatch: requested=%s actual=%s", req.Model, parsed.Model)
 	}
 	if len(parsed.Choices) == 0 {
 		return "", fmt.Errorf("openrouter returned no choices (body=%s)", string(raw))
