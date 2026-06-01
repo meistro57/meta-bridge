@@ -138,7 +138,7 @@ The academic chunker detects numbered section headers (`1.2.3 Title`), `Chapter 
 ### Reflection and reporting
 
 ```bash
-# Full reflection pass, resumes from last checkpoint
+# Full reflection pass, resumes via source-hash checkpoint dedup
 python reflect.py
 
 # Target a specific model
@@ -151,6 +151,7 @@ MB_EMBED_PROVIDER=ollama MB_EMBED_MODEL=nomic-embed-text:latest python reflect.p
 # Partial run options
 python reflect.py --limit 20 --workers 3 --from-scratch
 python reflect.py --source-collections mb_claims,mb_chunks
+MB_REFLECT_SOURCE_COLLECTIONS=mb_chunks,mb_claims python reflect.py
 
 # Interactive menu — model / workers / limit / from-scratch / collections
 python reflect.py --pick-collections
@@ -341,6 +342,8 @@ reflect_failures/           Failed reflection JSON artifacts (for debugging)
 | `MB_TITLE` | — | Source title |
 | `MB_AUTHOR` | — | Human author or scribe |
 | `MB_MAX_CHUNKS` | — | Limit extraction to first N chunks — useful for prompt tuning |
+| `MB_REFLECT_SOURCE_COLLECTIONS` | `mb_chunks,mb_claims` | Default source collections for `reflect.py` when no CLI override is provided |
+| `MB_REFLECT_SOURCE_FILTER` | — | Optional comma-separated source partition filter for `reflect.py` workers |
 | `MB_OUTPUT_DIR` | `./output` | Output directory for `.source.json`, `.chunks.json`, `.claims.json` |
 | `MB_GRAPHABILITY_INDEX` | `./graphability_index.json` | Path to graphability index JSON |
 | `MB_GRAPHABILITY_MIN` | `medium` | Minimum score tier to extract — `very_high`, `high`, or `medium` |

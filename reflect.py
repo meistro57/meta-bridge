@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-reflect.py — Gemma 4 reads every chunk in meta_test and produces structured
-reflections into a new collection (meta_reflections).
+reflect.py — Gemma 4 reads chunks from configured source collections
+(default: mb_chunks, mb_claims) and produces structured reflections into
+meta_reflections.
 
 This is an exploratory pass. The point is to let Gemma reason over the canon
 and see what falls out. Schema is deliberately open-ended — adjust the prompt
@@ -18,11 +19,11 @@ Fields per reflection:
 Runs against:
   Qdrant:  http://localhost:6333
   Ollama:  http://localhost:11434
-  Source:  meta_test (8869 chunks)
+  Source:  MB_REFLECT_SOURCE_COLLECTIONS or defaults (mb_chunks, mb_claims)
   Target:  meta_reflections (created on first run)
 
 Usage:
-  python reflect.py                           # run it, resumes automatically
+  python reflect.py                           # run it, resumes automatically (source-hash dedup)
   python reflect.py --limit 20                # only process first N new chunks (sanity test)
   python reflect.py --workers 3               # concurrent model calls (default 2)
   python reflect.py --model google/gemini-3.1-flash-lite
@@ -36,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import signal
 import sys
@@ -74,7 +76,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_EMBEDDINGS_URL = "https://openrouter.ai/api/v1/embeddings"
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
-DEFAULT_SOURCE_COLLECTIONS = ("mb_chunks", "mb_claims", "meta_test")
+DEFAULT_SOURCE_COLLECTIONS = ("mb_chunks", "mb_claims")
 SOURCE_COLLECTIONS = tuple(
     c.strip()
     for c in os.environ.get("MB_REFLECT_SOURCE_COLLECTIONS", "").split(",")
@@ -346,12 +348,12 @@ def scroll_source(collection: str, offset: str | None = None):
 
 
 def existing_reflection_ids(source_collections: tuple[str, ...]) -> set[tuple[str, str]]:
-    done: set[tuple[str, str]] = set()
+    done = set()
     offset = None
     while True:
         body = {
             "limit": 1000,
-            "with_payload": {"include": ["source_collection", "source_point_id"]},
+            "with_payload": {"include": ["source_hash"]},
             "with_vector": False,
         }
         if offset is not None:
@@ -359,10 +361,9 @@ def existing_reflection_ids(source_collections: tuple[str, ...]) -> set[tuple[st
         r = qdrant("POST", f"/collections/{TARGET_COLLECTION}/points/scroll", body).get("result", {})
         for pt in r.get("points", []):
             payload = pt.get("payload", {})
-            src_id = payload.get("source_point_id")
-            src_collection = payload.get("source_collection") or source_collections[0]
-            if src_id:
-                done.add((str(src_collection), str(src_id)))
+            source_hash = str(payload.get("source_hash") or "").strip()
+            if source_hash:
+                done.add(source_hash)
         offset = r.get("next_page_offset")
         if not offset:
             break
@@ -371,9 +372,27 @@ def existing_reflection_ids(source_collections: tuple[str, ...]) -> set[tuple[st
 # ----------------------------------------------------------------- llm --------
 
 def complete(model: str, prompt: str, system: str) -> str:
-    if model.startswith("ollama:"):
-        return ollama_chat(model[len("ollama:"):], prompt, system)
-    return openrouter_chat(model, prompt, system)
+    delays = (2, 4, 8, 16)
+    first_error: Exception | None = None
+
+    for attempt in range(len(delays) + 1):
+        try:
+            if model.startswith("ollama:"):
+                return ollama_chat(model[len("ollama:"):], prompt, system)
+            return openrouter_chat(model, prompt, system)
+        except Exception as e:
+            if first_error is None:
+                first_error = e
+            if attempt >= len(delays):
+                raise first_error
+            delay = delays[attempt] + random.random()
+            print(
+                f"[retry] complete attempt {attempt + 1}/{len(delays)} failed: {type(e).__name__}: {e}; "
+                f"retrying in {delay:.2f}s"
+            )
+            time.sleep(delay)
+
+    raise first_error if first_error is not None else RuntimeError("complete failed")
 
 
 def openrouter_model_matches(requested: str, actual: str) -> bool:
@@ -768,12 +787,20 @@ def iter_chunks(
             page = scroll_source(source_collection, offset)
             for pt in page.get("points", []):
                 pid = str(pt.get("id"))
-                if (source_collection, pid) in skip:
-                    continue
                 pl = pt.get("payload", {})
                 attr = first_attr(pl)
                 text = chunk_text(pl)
                 if not text:
+                    continue
+                source_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if source_hash in skip:
+                    continue
+                # Skip chunks the graphability scorer marked as not worth extracting.
+                # graphability_extracted=False means ingest already decided this was
+                # low/very_low yield — no point spending tokens on reflection either.
+                # Unknown/gap chunks (graphability_extracted=True, graphability_gap=True)
+                # are included — they were mandatory scans and may have content.
+                if pl.get("graphability_extracted") is False:
                     continue
                 source_file = source_file_name(pl, attr)
                 source_id = resolve_chunk_source_id(source_collection, pid, pl, attr, source_file, source_ids)

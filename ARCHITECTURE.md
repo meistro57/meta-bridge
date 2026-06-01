@@ -330,7 +330,7 @@ Deliberately matches the KAE stack so infrastructure is shared and familiar:
 - **Vector store:** Qdrant. Collections: `mb_sources`, `mb_chunks`, `mb_claims`, `mb_bridges`. Test collections use `_test` suffix; the reflection loop uses `meta_reflection_loop_test`.
 - **LLM:** OpenRouter. DeepSeek R1 for reasoning passes (dedup judgment, entailment, contradiction detection). Gemini Flash for bulk extraction and classification. Gemma 4 for reflection and reality filter scoring.
 - **Local LLM fallback:** Ollama with Qwen2.5-Coder:32b on the BOXX, for passes where API cost is an issue at scale.
-- **Reflection loop:** LangGraph (`reflect_loop.py`) drives a stateful multi-iteration reflection pass. Distinct from the one-shot `reflect.py` batch pass — useful for goal-directed hunts (e.g., "find contradictions") without modifying stable collections.
+- **Reflection loop:** LangGraph (`reflect_loop.py`) drives a stateful multi-iteration reflection pass. Distinct from the one-shot `reflect.py` batch pass (defaults: `mb_chunks`,`mb_claims` → `meta_reflections`; resume dedup keyed by `source_hash`) — useful for goal-directed hunts (e.g., "find contradictions") without modifying stable collections.
 - **Epistemic scoring:** `scoring/reality_filter.py` — standalone tool that classifies bridges from vectoreology JSON reports. Reads the rubric from `scoring/reality_filter_prompt.md`. Controlled by `MB_FILTER_MODEL` (falls back to `MB_MODEL`).
 - **MCP integrations:** Qdrant and Redis MCP servers configured in `.crush.json` for interactive use.
 - **UI:** Bubbletea/Lipgloss TUI for the headless/batch-mode cartographer's desk; separate SSE web dashboard (pattern from KAE Lens) for bridge feed and claim browsing.
