@@ -1,0 +1,886 @@
+# sources.yaml — Meta Bridge source catalog
+# The ingest pipeline checks this file first before running LLM metadata extraction.
+# Fields:
+#   id           - stable snake_case identifier (used as Qdrant source key)
+#   title        - full book/work title
+#   author       - human author or scribe
+#   year         - publication/copyright year (0 if unknown)
+#   channel_type - authored | channeled | regression | dictated | dramatized | dialogue
+#   tradition    - named source tradition (empty if none)
+#   medium       - claimed non-human source or entity (empty if none)
+#   file         - exact filename in incoming/ directory
+#   skip         - true to exclude from pipeline (corrupt, irrelevant, duplicate)
+#   notes        - optional human notes
+
+sources:
+
+  # ── Mark's own work ────────────────────────────────────────────────────────
+  - id: root_access
+    title: "ROOT ACCESS: A Misfit's Complete Guide to Reality Engineering"
+    author: "Mark J. Hubrich"
+    year: 2026
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "ROOT-ACCESS_A-Misfit's-Complete-Guide-to-Reality-Engineering.pdf"
+
+  # ── Ra / Law of One ────────────────────────────────────────────────────────
+  - id: the_ra_contact_volume_1
+    title: "The Ra Contact: Teaching the Law of One, Volume I"
+    author: "Carla L. Rueckert, Don Elkins, Jim McCarty"
+    year: 2018
+    channel_type: channeled
+    tradition: "Ra/Law-of-One"
+    medium: "Ra"
+    file: "the_ra_contact_volume_1.pdf"
+
+  - id: the_ra_contact_volume_2
+    title: "The Ra Contact: Teaching the Law of One, Volume II"
+    author: "Carla L. Rueckert, Don Elkins, Jim McCarty"
+    year: 2018
+    channel_type: channeled
+    tradition: "Ra/Law-of-One"
+    medium: "Ra"
+    file: "the_ra_contact_volume_2.pdf"
+
+  # ── Seth Material ──────────────────────────────────────────────────────────
+  - id: seth_speaks
+    title: "Seth Speaks: The Eternal Validity of the Soul"
+    author: "Jane Roberts"
+    year: 1970
+    channel_type: channeled
+    tradition: "Seth"
+    medium: "Seth"
+    file: "seth_speaks.pdf"
+
+  - id: seth_nature_of_personal_reality
+    title: "The Nature of Personal Reality"
+    author: "Jane Roberts"
+    year: 1974
+    channel_type: channeled
+    tradition: "Seth"
+    medium: "Seth"
+    file: "Jane-Roberts-Seth-Nature-of-Personal-Reality-ocr.pdf"
+
+  - id: seth_nature_of_personal_reality_nonOCR
+    title: "The Nature of Personal Reality"
+    author: "Jane Roberts"
+    year: 1974
+    channel_type: channeled
+    tradition: "Seth"
+    medium: "Seth"
+    file: "Jane-Roberts-Seth-Nature-of-Personal-Reality.pdf"
+    notes: "Non-OCR version — prefer the OCR version for better text extraction"
+
+  # ── Dolores Cannon / QHHT ──────────────────────────────────────────────────
+  - id: dolores_cannon_conversations_with_nostradamus_v1
+    title: "Conversations with Nostradamus: His Prophecies Explained, Volume One"
+    author: "Dolores Cannon"
+    year: 1989
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: "Nostradamus"
+    file: "Dolores-Cannon-Conversations-With-Nostradamus-V1.pdf"
+
+  - id: dolores_cannon_conversations_with_nostradamus_v2
+    title: "Conversations with Nostradamus: His Prophecies Explained, Volume Two"
+    author: "Dolores Cannon"
+    year: 1992
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: "Nostradamus"
+    file: "CONVERSATIONS_WITH_NOSTRADAMUS_02_HIS_PROPHECIES_EXPLAINED_-_CANNON_DOLORES_-.pdf"
+
+  - id: dolores_cannon_conversations_with_nostradamus_v3
+    title: "Conversations with Nostradamus: His Prophecies Explained, Volume Three"
+    author: "Dolores Cannon"
+    year: 1992
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: "Nostradamus"
+    file: "Cannon_1992_Conversations_with_Nostradamus__His_Prophecies_Explaned_Vol_3_559pgs.pdf"
+
+  - id: dolores_cannon_the_custodians
+    title: "The Custodians: Beyond Abduction"
+    author: "Dolores Cannon"
+    year: 1999
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Dolores-Cannon-The-Custodians.pdf"
+
+  - id: dolores_cannon_they_walked_with_jesus
+    title: "They Walked with Jesus"
+    author: "Dolores Cannon"
+    year: 1994
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Dolores-Cannon-They-Walked-with-Jesus.pdf"
+
+  - id: dolores_cannon_between_death_and_life
+    title: "Between Death and Life: Conversations with a Spirit"
+    author: "Dolores Cannon"
+    year: 1993
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Dolores-Cannon-Between-Death-And-Life.pdf"
+
+  - id: dolores_cannon_convoluted_universe_3
+    title: "The Convoluted Universe: Book Three"
+    author: "Dolores Cannon"
+    year: 2008
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Dolores-Cannon-The-Convoluted-Universe-Book-3.pdf"
+
+  - id: dolores_cannon_convoluted_universe_4
+    title: "The Convoluted Universe: Book Four"
+    author: "Dolores Cannon"
+    year: 2012
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "The-Convoluted-Universe_Book-Four-Dolores-Cannon.pdf"
+
+  - id: dolores_cannon_convoluted_universe_5
+    title: "The Convoluted Universe: Book Five"
+    author: "Dolores Cannon"
+    year: 2015
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Convoluted-Universe-Book-Five,-The-Dolores-Cannon.pdf"
+
+  - id: dolores_cannon_three_waves_of_volunteers
+    title: "The Three Waves of Volunteers and the New Earth"
+    author: "Dolores Cannon"
+    year: 2011
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "Dolores_Cannon_The_Three_Waves_of_Volunteers_and_the_New_Earth.pdf"
+
+  - id: dolores_cannon_legend_of_starcrash
+    title: "The Legend of Starcrash"
+    author: "Dolores Cannon"
+    year: 1994
+    channel_type: regression
+    tradition: "QHHT/Cannon"
+    medium: ""
+    file: "The-Legend-of-Starcrash-Dolores-Cannon.pdf"
+
+  # ── Itzhak Bentov ──────────────────────────────────────────────────────────
+  - id: bentov_stalking_the_wild_pendulum
+    title: "Stalking the Wild Pendulum: On the Mechanics of Consciousness"
+    author: "Itzhak Bentov"
+    year: 1977
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "ItzhakBentov-StalkingTheWildPendulum_OnTheMechanicsOfConsciousnessV1_text.pdf"
+
+  - id: bentov_brief_tour_of_higher_consciousness
+    title: "A Brief Tour of Higher Consciousness: A Cosmic Book on the Mechanics of Creation"
+    author: "Itzhak Bentov"
+    year: 2000
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Itzhak-Bentov-Brief-Tour-of-Higher-Consciousness.pdf"
+
+  - id: bentov_cosmic_book
+    title: "A Cosmic Book: On the Mechanics of Creation"
+    author: "Itzhak Bentov"
+    year: 1988
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "A-cosmic-book-on-the-mechanics-of-creation-by-Itzhak-Bentov.pdf"
+
+  # ── Edgar Cayce ────────────────────────────────────────────────────────────
+  - id: edgar_cayces_famous_black_book
+    title: "Individual Reference File of Extracts from the Edgar Cayce Readings"
+    author: "Edgar Cayce"
+    year: 2018
+    channel_type: channeled
+    tradition: "Edgar Cayce"
+    medium: "Edgar Cayce"
+    file: "Edgar-Cayces-Famous-Black-Book.pdf"
+
+  # ── C. G. Jung ─────────────────────────────────────────────────────────────
+  - id: jung_answer_to_job
+    title: "Answer to Job"
+    author: "C. G. Jung"
+    year: 1958
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "C.-G.-Jung-Answer-to-Job-Princeton-University-Press-1952.pdf"
+
+  # ── Goblet of Truth / FIGU ─────────────────────────────────────────────────
+  - id: goblet_of_the_truth
+    title: "Goblet of the Truth"
+    author: "Eduard Albert Meier"
+    year: 2008
+    channel_type: channeled
+    tradition: "FIGU"
+    medium: "Henoch, Elia, Jesaja, Jeremia, Jmmanuel, Muhammad"
+    file: "goblet-of-the-truth-ENGLISH.pdf"
+
+  # ── Nostradamus (primary) ──────────────────────────────────────────────────
+  - id: the_complete_works_of_nostradamus
+    title: "The Compleat Works of Nostradamus"
+    author: "Nostradamus"
+    year: 1555
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "the-complete-works-of-nostradamus.pdf"
+
+  # ── Vedic / Hindu ──────────────────────────────────────────────────────────
+  - id: the_upanishads
+    title: "The Upanishads"
+    author: "Swami Paramananda"
+    year: 1919
+    channel_type: authored
+    tradition: "Vedanta"
+    medium: ""
+    file: "The-Upanishads-Translated-by-Swami-Paramananda.pdf"
+
+  - id: the_yajur_veda
+    title: "The Yajur Veda (Taittiriya Sanhita)"
+    author: "Unknown"
+    year: 0
+    channel_type: authored
+    tradition: "Vedic"
+    medium: ""
+    file: "The-Yajur-Veda-Taittiriya-Sanhita-Taittiriya-Sanhita.pdf"
+
+  - id: the_doctrine_of_maya
+    title: "The Doctrine of Maya: In the Philosophy of the Vedanta"
+    author: "Prabhu Dutt Shastri"
+    year: 1911
+    channel_type: authored
+    tradition: "Vedanta"
+    medium: ""
+    file: "THE-DOCTRINE-OF-MAYA.pdf"
+
+  - id: the_satapatha_brahmana
+    title: "The Satapatha-Brahmana"
+    author: "Julius Eggeling"
+    year: 1885
+    channel_type: authored
+    tradition: "Vedic"
+    medium: ""
+    file: "satapathabrahman02.pdf"
+
+  # ── Taoism ─────────────────────────────────────────────────────────────────
+  - id: taoism_the_quest_for_immortality
+    title: "Taoism: The Quest For Immortality"
+    author: "John Blofeld"
+    year: 1979
+    channel_type: authored
+    tradition: "Taoism"
+    medium: ""
+    file: "John-Blofeld-Taoism-The-Quest-for-Immortality.pdf"
+
+  # ── Ancient Egypt ──────────────────────────────────────────────────────────
+  - id: rise_and_fall_of_ancient_egypt
+    title: "The Rise and Fall of Ancient Egypt"
+    author: "Toby Wilkinson"
+    year: 2010
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Rise-and-Fall-of-Ancient-Egypt-Toby-Wilkinson.pdf"
+
+  - id: ancient_egypt_prehistory_to_islamic_conquest
+    title: "Ancient Egypt: From Prehistory to the Islamic Conquest"
+    author: "Kathleen Kuiper"
+    year: 2011
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Ancient_Egypt_From.pdf"
+
+  - id: religions_of_ancient_egypt_and_babylonia
+    title: "The Religions of Ancient Egypt and Babylonia"
+    author: "Archibald Henry Sayce"
+    year: 1903
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Religions-of-Ancient-Egypt-and-Babylonia.pdf"
+
+  - id: before_the_pyramids
+    title: "Before the Pyramids"
+    author: "Christopher Knight, Alan Butler"
+    year: 2009
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Before-The-Pyramids.pdf"
+
+  # ── Sacred Geometry / Flower of Life ──────────────────────────────────────
+  - id: ancient_secret_of_the_flower_of_life_vol1
+    title: "The Ancient Secret of the Flower of Life, Volume I"
+    author: "Drunvalo Melchizedek"
+    year: 1999
+    channel_type: channeled
+    tradition: ""
+    medium: ""
+    file: "Ancient-Secret-of-the-Flower-of-Life-Vol-I-Drunvalo-Melchizedek-1999.pdf"
+
+  # ── Aboriginal / Indigenous ────────────────────────────────────────────────
+  - id: on_aboriginal_religion
+    title: "On Aboriginal Religion"
+    author: "W. E. H. Stanner"
+    year: 2014
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "On-Aboriginal-Religion.pdf"
+
+  # ── Celtic ─────────────────────────────────────────────────────────────────
+  - id: encyclopedia_of_celtic_mythology_and_folklore
+    title: "The Encyclopedia of Celtic Mythology and Folklore"
+    author: "Patricia Monaghan"
+    year: 2004
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "patricia-monaghan-encyclopedia-of-celtic-mythology-and-folklore-2004.pdf"
+
+  - id: religion_of_the_ancient_celts
+    title: "The Religion of the Ancient Celts"
+    author: "J. A. MacCulloch"
+    year: 1911
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "religion-of-the-ancient-celts.pdf"
+
+  # ── Chinese Spirituality ───────────────────────────────────────────────────
+  - id: spiritual_foundations_and_chinese_culture
+    title: "Spiritual Foundations and Chinese Culture: A Philosophical Approach"
+    author: "Anthony J. Carroll, Katia Lenehan"
+    year: 2016
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Spiritual-Foundations-and-Chinese-Culture.pdf"
+
+  # ── Russian Spirituality ───────────────────────────────────────────────────
+  - id: epstein_russian_spirituality
+    title: "Russian Spirituality and the Secularization of Culture"
+    author: "Mikhail N. Epstein"
+    year: 2011
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "epstein_russian_spirituality_2011__izd.pdf"
+
+  # ── African / South African ────────────────────────────────────────────────
+  - id: the_language_of_faith_in_south_africa
+    title: "The Language of Faith in Southern Africa: Spirit World, Power, Community, Holism"
+    author: "Hermen Kroesbergen"
+    year: 2019
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Language-of-Faith-in-South-Africa.pdf"
+
+  # ── Consciousness Science ──────────────────────────────────────────────────
+  - id: the_science_of_the_soul
+    title: "The Science of the Soul: On Consciousness and the Structure of Reality"
+    author: "Geoffrey D. Falk"
+    year: 2004
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Science-of-the-Soul-On-Consciousness-and-the-Structure-of-Reality.pdf"
+
+  - id: metaphysics_of_the_gods
+    title: "Metaphysics of the Gods"
+    author: "B. R. Taylor"
+    year: 2017
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "B-R-Taylor-Metaphysics-of-the-Gods.pdf"
+
+  # ── Awakening / New Age ────────────────────────────────────────────────────
+  - id: the_awakening_manual
+    title: "The Awakening Manual I Didn't Get (So I Wrote It Myself)"
+    author: "Unknown"
+    year: 0
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Awakening-Manual-I-Didn't-Get-(So-I-Wrote-It-Myself).pdf"
+    notes: "Author/year unknown — verify before full ingest"
+
+  - id: the_imaginal_human
+    title: "The Imaginal Human: Awakening Your Creative Power"
+    author: "Unknown"
+    year: 0
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Imaginal-Human_Awakening-Your-Creative-Power.pdf"
+    notes: "Author/year unknown — verify before full ingest"
+
+  # ── Catholic / Purgatory ───────────────────────────────────────────────────
+  - id: the_consolations_of_purgatory
+    title: "The Consolations of Purgatory"
+    author: "Rev. Father H. Faure"
+    year: 1912
+    channel_type: authored
+    tradition: "Catholicism"
+    medium: ""
+    file: "The-Consolations-of-Purgatory.pdf"
+
+  - id: the_manuscript_of_purgatory
+    title: "The Manuscript of Purgatory"
+    author: "Sister María de la Cruz"
+    year: 1963
+    channel_type: channeled
+    tradition: "Catholic mysticism"
+    medium: "Sister María Gabriela"
+    file: "The-Manuscript-of-Purgatory-Sister-Maria-de-La-Cruz.pdf"
+
+  - id: resisting_the_devil
+    title: "Resisting the Devil: A Catholic Perspective on Deliverance"
+    author: "Neal Lozano"
+    year: 2010
+    channel_type: authored
+    tradition: "Catholicism"
+    medium: ""
+    file: "Resisting-the-Devil-A-Catholic-Perspective-on-Deliverance-Neal-Lozano-Z-Library.pdf"
+
+  # ── Bible ──────────────────────────────────────────────────────────────────
+  - id: csb_pew_bible
+    title: "The Holy Bible (Christian Standard Bible)"
+    author: "Various"
+    year: 2017
+    channel_type: authored
+    tradition: "Christianity"
+    medium: ""
+    file: "CSB_Pew_Bible_2nd_Printing.pdf"
+
+  # ── Physics / Science ─────────────────────────────────────────────────────
+  - id: tipler_llewellyn_modern_physics
+    title: "Modern Physics"
+    author: "Paul A. Tipler, Ralph A. Llewellyn"
+    year: 2008
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Tipler_Llewellyn-Modern_Physics.pdf"
+    notes: "Physics textbook — low metaphysical claim yield expected"
+
+  - id: lecture_notes_on_thermodynamics
+    title: "Lecture Notes on Thermodynamics"
+    author: "Joseph M. Powers"
+    year: 2026
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Lecture-Notes-on-Thermodynamics.pdf"
+    notes: "Engineering textbook — minimal metaphysical content; consider skipping"
+
+  # ── SKIP — corrupt / duplicate / failed ingestion ─────────────────────────
+  - id: the_satapatha_brahmana_ghost
+    title: "The Satapatha-Brahmana (ghost entry)"
+    author: "Unknown"
+    year: 0
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Satapatha-brahmana.pdf"
+    skip: true
+    notes: "Duplicate/ghost entry. Use satapathabrahman02.pdf instead."
+
+  - id: chinese_gods_compressed
+    title: "Chinese Gods: The Unseen World of Spirits and Demons"
+    author: "Unknown"
+    year: 0
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "chinese-gods-the-unseen-world-of-spirits-and-demons-compressed.pdf"
+    skip: true
+    notes: "Heavily compressed PDF — failed ingestion in previous run. Needs a clean copy."
+
+  # ── Apocrypha / Lost Scripture ─────────────────────────────────────────────
+  - id: the_book_of_enoch
+    title: "The Book of Enoch"
+    author: "R. H. Charles (translator)"
+    year: 1917
+    channel_type: channeled
+    tradition: "Jewish Apocalyptic"
+    medium: "Enoch / Angels"
+    file: "The-Book-of-Enoch,-by-R.H.-Charles,-[1917].txt"
+    notes: "Pre-biblical cosmology — Watchers, fallen angels, heavenly journeys, judgment"
+
+  - id: the_forgotten_books_of_eden
+    title: "The Forgotten Books of Eden"
+    author: "Rutherford H. Platt Jr. (editor)"
+    year: 1926
+    channel_type: authored
+    tradition: "Jewish Apocrypha"
+    medium: ""
+    file: "The-Forgotten-Books-of-Eden,-by-Rutherford-H.-Platt-Jr.,-[1926].txt"
+    notes: "Apocryphal texts including Books of Adam and Eve, Psalms of Solomon"
+
+  - id: the_lost_books_of_the_bible
+    title: "The Lost Books of the Bible"
+    author: "Unknown (editor)"
+    year: 1926
+    channel_type: authored
+    tradition: "Christian Apocrypha"
+    medium: ""
+    file: "The-Lost-Books-of-the-Bible,-[1926].txt"
+    notes: "Apocryphal gospels and epistles excluded from canonical Bible"
+
+  - id: the_complete_sayings_of_jesus
+    title: "The Complete Sayings of Jesus"
+    author: "Arthur Hinds"
+    year: 1927
+    channel_type: dialogue
+    tradition: "Christianity"
+    medium: "Jesus"
+    file: "The-Complete-Sayings-of-Jesus,-by-Arthur-Hinds,-[1927].txt"
+    notes: "All words attributed to Jesus compiled from canonical gospels"
+
+  - id: chronicles_of_jerahmeel
+    title: "Chronicles of Jerahmeel"
+    author: "M. Gaster (translator)"
+    year: 1899
+    channel_type: authored
+    tradition: "Jewish Mysticism"
+    medium: ""
+    file: "Chronicles-of-Jerahmeel,-by-M.-Gaster-[1899].txt"
+
+  # ── Atlantis / Ancient Civilizations ──────────────────────────────────────
+  - id: atlantis_the_antediluvian_world
+    title: "Atlantis: The Antediluvian World"
+    author: "Ignatius Donnelly"
+    year: 1882
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Atlantis,-the-Antediluvian-World,-by-Ignatius-Donnelly,-[1882].txt"
+    notes: "Foundational Atlantis theory — comparative mythology and geological evidence"
+
+  - id: a_dweller_on_two_planets
+    title: "A Dweller on Two Planets"
+    author: "Frederick S. Oliver"
+    year: 1894
+    channel_type: channeled
+    tradition: "Atlantean"
+    medium: "Phylos the Thibetan"
+    file: "A-Dweller-on-Two-Planets,-by-Phylos-the-Thibetan-(Frederick-S.-Oliver),-[1894].txt"
+    notes: "Channeled Atlantis narrative — one of the earliest channeled books in the modern tradition"
+
+  - id: the_oera_linda_book
+    title: "The Oera Linda Book"
+    author: "William R. Sandbach (translator)"
+    year: 1876
+    channel_type: authored
+    tradition: "Frisian/Ancient European"
+    medium: ""
+    file: "The-Oera-Linda-Book,-by-William-R.-Sandbach,-[1876].txt"
+    notes: "Controversial ancient manuscript — alleged Frisian chronicle of pre-history"
+
+  - id: selestor_men_of_atlantis
+    title: "Selestor's Men of Atlantis"
+    author: "Clara Iza von Ravn"
+    year: 1937
+    channel_type: channeled
+    tradition: "Atlantean"
+    medium: "Selestor"
+    file: "Selestor's-Men-of-Atlantis,-by-Clara-Iza-von-Ravn,-[1937].txt"
+
+  # ── Babylonian / Mesopotamian ──────────────────────────────────────────────
+  - id: myths_of_babylonia_and_assyria
+    title: "Myths of Babylonia and Assyria"
+    author: "Donald A. MacKenzie"
+    year: 1915
+    channel_type: authored
+    tradition: "Mesopotamian"
+    medium: ""
+    file: "Myths-of-Babylonia-and-Assyria,-by-Donald-A.-MacKenzie,-[1915].txt"
+
+  - id: the_chaldean_account_of_genesis
+    title: "The Chaldean Account of Genesis"
+    author: "George Smith"
+    year: 1876
+    channel_type: authored
+    tradition: "Mesopotamian"
+    medium: ""
+    file: "The-Chaldean-Account-of-Genesis,-by-George-Smith,-[1876].txt"
+    notes: "First translation of the Babylonian creation and flood narratives from cuneiform"
+
+  - id: the_babylonian_legends_of_creation
+    title: "The Babylonian Legends of Creation"
+    author: "E. A. Wallis Budge"
+    year: 1921
+    channel_type: authored
+    tradition: "Mesopotamian"
+    medium: ""
+    file: "The-Babylonian-Legends-of-Creation,-by-E.-A.-Wallis-Budge,-[1921].txt"
+
+  - id: the_seven_tablets_of_creation
+    title: "The Seven Tablets of Creation"
+    author: "Leonard William King"
+    year: 1902
+    channel_type: authored
+    tradition: "Mesopotamian"
+    medium: ""
+    file: "The-Seven-Tablets-of-Creation,-by-Leonard-William-King,-[1902].txt"
+    notes: "Enuma Elish — the Babylonian creation epic"
+
+  - id: records_of_the_past_vol1
+    title: "Records of the Past, 2nd Series, Vol. I"
+    author: "A. H. Sayce (editor)"
+    year: 1888
+    channel_type: authored
+    tradition: "Ancient Near East"
+    medium: ""
+    file: "Records-of-the-Past,-2nd-Series,-Vol.-I,-ed.-by-A.-H.-Sayce,-[1888].txt"
+
+  - id: records_of_the_past_vol2
+    title: "Records of the Past, 2nd Series, Vol. II"
+    author: "A. H. Sayce (editor)"
+    year: 1888
+    channel_type: authored
+    tradition: "Ancient Near East"
+    medium: ""
+    file: "Records-of-the-Past,-2nd-Series,-Vol.-II,-ed.-by-A.-H.-Sayce,-[1888].txt"
+
+  - id: records_of_the_past_vol3
+    title: "Records of the Past, 2nd Series, Vol. III"
+    author: "A. H. Sayce (editor)"
+    year: 1890
+    channel_type: authored
+    tradition: "Ancient Near East"
+    medium: ""
+    file: "Records-of-the-Past,-2nd-Series,-Vol.-III,-ed.-by-A.-H.-Sayce,-[1890].txt"
+
+  - id: records_of_the_past_vol4
+    title: "Records of the Past, 2nd Series, Vol. IV"
+    author: "A. H. Sayce (editor)"
+    year: 1890
+    channel_type: authored
+    tradition: "Ancient Near East"
+    medium: ""
+    file: "Records-of-the-Past,-2nd-Series,-Vol.-IV,-ed.-by-A.-H.-Sayce,-[1890].txt"
+
+  # ── Comparative Religion / History of Religion ────────────────────────────
+  - id: pagan_christs
+    title: "Pagan Christs: Studies in Comparative Hierology"
+    author: "John M. Robertson"
+    year: 1911
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Pagan-Christs,-by-John-M.-Robertson,-[1911].txt"
+    notes: "Comparative mythology — pre-Christian dying-and-rising god parallels"
+
+  - id: pagan_and_christian_rome
+    title: "Pagan and Christian Rome"
+    author: "Rodolfo Lanciani"
+    year: 1892
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Pagan-and-Christian-Rome.txt"
+
+  - id: stolen_legacy
+    title: "Stolen Legacy: Greek Philosophy is Stolen Egyptian Philosophy"
+    author: "George G. M. James"
+    year: 1954
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Stolen-Legacy,-by-George-G.-M.-James,-[1954].txt"
+    notes: "Argues Greek philosophy derived from Egyptian mystery schools — bridges Hermeticism to Western philosophy"
+
+  - id: astrology_and_religion_greeks_romans
+    title: "Astrology and Religion Among the Greeks and Romans"
+    author: "Franz Cumont"
+    year: 1912
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Astrology-and-Religion-Among-the-Greeks-and-Romans,-by-Franz-Cumont,-[1912].txt"
+
+  - id: prolegomena_history_ancient_israel
+    title: "Prolegomena to the History of Ancient Israel"
+    author: "Julius Wellhausen"
+    year: 1885
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Prolegomena-to-the-History-of-Ancient-Israel,-by-Julius-Wellhausen,-[1885].txt"
+
+  # ── Gnosticism / Hermeticism ───────────────────────────────────────────────
+  - id: gospel_of_thomas_lambdin
+    title: "The Gospel of Thomas (Lambdin Translation)"
+    author: "Thomas O. Lambdin (translator)"
+    year: 1977
+    channel_type: dialogue
+    tradition: "Gnosticism"
+    medium: "Jesus"
+    file: "Gospel-of-Thomas-Lambdin.pdf"
+    notes: "Nag Hammadi Codex II — 114 sayings of Jesus, no narrative"
+
+  - id: gospel_of_thomas_leloup
+    title: "The Gospel of Thomas: The Gnostic Wisdom of Jesus"
+    author: "Jean-Yves Leloup"
+    year: 2005
+    channel_type: dialogue
+    tradition: "Gnosticism"
+    medium: "Jesus"
+    file: "Leloup J.-Y. - The Gospel of Thomas. The Gnostic Wisdom of Jesus.pdf"
+    notes: "Commentary + translation — deeper exegesis than Lambdin alone"
+
+  - id: kybalion
+    title: "The Kybalion: A Study of the Hermetic Philosophy of Ancient Egypt and Greece"
+    author: "Three Initiates"
+    year: 1908
+    channel_type: authored
+    tradition: "Hermeticism"
+    medium: ""
+    file: "kybalion.pdf"
+    notes: "Seven Hermetic principles — The All is Mind. Foundational to Western esotericism"
+
+  # ── Buddhism ───────────────────────────────────────────────────────────────
+  - id: the_tibetan_book_of_the_dead
+    title: "The Tibetan Book of the Dead"
+    author: "Padmasambhava / Chogyam Trungpa & Francesca Fremantle (translators)"
+    year: 2005
+    channel_type: channeled
+    tradition: "Nyingma Tibetan Buddhism"
+    medium: "Padmasambhava"
+    file: "The-Tibetan-Book-of-the-Dead.pdf"
+    notes: "Bardo Thodol — consciousness navigation after death; terma text revealed by Karma Lingpa"
+
+  - id: the_buddhist_catechism
+    title: "The Buddhist Catechism"
+    author: "Henry S. Olcott"
+    year: 1908
+    channel_type: authored
+    tradition: "Buddhism / Theosophy"
+    medium: ""
+    file: "The-Buddhist-Catechism,-by-Henry-S.-Olcott,-[1908].txt"
+
+  - id: amitabha_buddhist_theology
+    title: "Amitabha: A Story of Buddhist Theology"
+    author: "Paul Carus"
+    year: 1906
+    channel_type: authored
+    tradition: "Pure Land Buddhism"
+    medium: ""
+    file: "Amitabha,-A-Story-of-Buddhist-Theology,-by-Paul-Carus,-[1906].txt"
+
+  - id: tibetan_folk_tales
+    title: "Tibetan Folk Tales"
+    author: "A. L. Shelton"
+    year: 1925
+    channel_type: authored
+    tradition: "Tibetan Buddhism"
+    medium: ""
+    file: "Tibetan-Folk-Tales,-by-A.L.-Shelton,-[1925].txt"
+
+  # ── Holographic Universe / Physics-Consciousness Bridge ───────────────────
+  - id: the_holographic_universe
+    title: "The Holographic Universe"
+    author: "Michael Talbot"
+    year: 1991
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "The-Holographic-Universe.pdf"
+    notes: "The exact book cited in quantum mysticism debate — Bohm implicate order, Pribram holographic brain"
+
+  # ── Siberian / Central Asian ───────────────────────────────────────────────
+  - id: journey_in_southern_siberia
+    title: "A Journey in Southern Siberia"
+    author: "Jeremiah Curtin"
+    year: 1909
+    channel_type: authored
+    tradition: "Siberian Shamanism"
+    medium: ""
+    file: "A-Journey-in-Southern-Siberia,-by-Jeremiah-Curtin,-[1909].txt"
+    notes: "Buriat and Mongol shamanic traditions — soul journeys, spirit worlds"
+
+  # ── African / West African ─────────────────────────────────────────────────
+  - id: at_the_back_of_the_black_mans_mind
+    title: "At the Back of the Black Man's Mind"
+    author: "Richard Edward Dennett"
+    year: 1906
+    channel_type: authored
+    tradition: "West African / Fjort"
+    medium: ""
+    file: "At-the-Back-of-the-Black-Man's-Mind,-by-Richard-Edward-Dennett,-[1906].txt"
+
+  - id: notes_on_folklore_of_the_fjort
+    title: "Notes on the Folklore of the Fjort"
+    author: "Richard Edward Dennett"
+    year: 1898
+    channel_type: authored
+    tradition: "West African / Fjort"
+    medium: ""
+    file: "Notes-on-the-Folklore-of-the-Fjort,-by-Richard-Edward-Dennett,-[1898].txt"
+
+  - id: womans_mysteries_primitive_people
+    title: "Woman's Mysteries of a Primitive People"
+    author: "D. Amaury Talbot"
+    year: 1915
+    channel_type: authored
+    tradition: "West African / Ibibio"
+    medium: ""
+    file: "Woman's-Mysteries-of-a-Primitive-People,-by-D.-Amaury-Talbot,-[1915].txt"
+
+  # ── American Folklore / Mythology ─────────────────────────────────────────
+  - id: myths_and_legends_of_our_own_land
+    title: "Myths and Legends of Our Own Land"
+    author: "Charles M. Skinner"
+    year: 1896
+    channel_type: authored
+    tradition: "American Folklore"
+    medium: ""
+    file: "Myths-and-Legends-of-our-Own-Land,-by-Charles-M.-Skinner,-[1896].txt"
+
+  # ── Misc / Wildcards ──────────────────────────────────────────────────────
+  - id: folk_lore_of_the_holy_land
+    title: "Folk-lore of the Holy Land: Moslem, Christian and Jewish"
+    author: "J. E. Hanauer"
+    year: 1907
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Folk-lore-of-the-Holy-Land,-Moslem,-Christian-and-Jewish,-by-J.-E.-Hanauer,-[1907].txt"
+
+  - id: moon_lore
+    title: "Moon Lore"
+    author: "Timothy Harley"
+    year: 1885
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Moon-Lore,-by-Timothy-Harley,-[1885].txt"
+
+  - id: sun_lore_of_all_ages
+    title: "Sun Lore of All Ages"
+    author: "William Tyler Olcott"
+    year: 1914
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "Sun-Lore-of-All-Ages,-by-William-Tyler-Olcott,-[1914].txt"

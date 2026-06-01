@@ -33,6 +33,7 @@ type Options struct {
 	MaxTokens      int    // hard cap; a single paragraph larger than this becomes its own chunk
 	HeaderPattern  string // optional regex for section headers; if empty, no header detection
 	FallbackHeader string // default label before first matched header
+	SourceTitle    string // optional: filters running page footers that echo the book title
 }
 
 // DefaultOptions returns sensible Wave 1 defaults.
@@ -69,8 +70,16 @@ func Split(text string, opts Options) []Chunk {
 		}
 	}
 
-	// Normalize line endings and collapse runs of blank lines to exactly one.
+	// Build a set of uppercase title fragments to suppress as false chapter
+	// headers (e.g. "THE CUSTODIANS" appearing as a running page footer).
+	titleFrags := buildTitleFragments(opts.SourceTitle)
+	isFooterEcho := func(p string) bool {
+		return titleFrags[strings.ToUpper(strings.TrimSpace(p))]
+	}
+
+	// Normalize line endings, form feeds, and runs of blank lines.
 	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\f", "\n\n") // pdftotext page breaks -> paragraph breaks
 	text = regexp.MustCompile(`\n{3,}`).ReplaceAllString(text, "\n\n")
 
 	paragraphs := splitParagraphs(text)
@@ -97,20 +106,39 @@ func Split(text string, opts Options) []Chunk {
 		curTokens = 0
 	}
 
+	// tokensSinceHeader tracks content accumulated since the last header fired.
+	// If a new header arrives before minContentBetweenHeaders tokens have been
+	// seen, it's almost certainly a table-of-contents entry, not a real chapter
+	// boundary — skip the label update to prevent TOC poisoning.
+	const minContentBetweenHeaders = 80 // ~320 chars; enough to confirm real prose
+	tokensSinceHeader := minContentBetweenHeaders // allow first header unconditionally
+
+	acceptHeader := func(label string) bool {
+		if tokensSinceHeader >= minContentBetweenHeaders {
+			tokensSinceHeader = 0
+			return true
+		}
+		// Rapid-fire header with no real content since the last one — TOC entry.
+		return false
+	}
+
 	for i, p := range paragraphs {
-		// ── Regex header detection ────────────────────────────────────────────
+		// -- Regex header detection -------------------------------------------
 		// Matches "Chapter 1", "Session IV", "Part Two", etc.
 		if headerRE != nil {
 			trimmed := strings.TrimLeft(p, " \t")
 			if loc := headerRE.FindStringIndex(trimmed); loc != nil && loc[0] == 0 && len(trimmed) <= 120 {
-				flush()
-				currentChapter = strings.TrimSpace(trimmed[loc[0]:loc[1]])
-				chunkChapter = currentChapter
+				proposed := strings.TrimSpace(trimmed[loc[0]:loc[1]])
+				if acceptHeader(proposed) {
+					flush()
+					currentChapter = proposed
+					chunkChapter = currentChapter
+				}
 				continue
 			}
 		}
 
-		// ── Split-line chapter detection ──────────────────────────────────────
+		// -- Split-line chapter detection -------------------------------------
 		// Dolores Cannon PDFs (and others) often render the section keyword
 		// alone on one paragraph and the title on the next, e.g.:
 		//   "Chapter"
@@ -119,9 +147,12 @@ func Split(text string, opts Options) []Chunk {
 		if isSectionKeywordOnly(p) && i+1 < len(paragraphs) {
 			nextP := strings.TrimSpace(paragraphs[i+1])
 			if isTitleLine(nextP) {
-				flush()
-				currentChapter = strings.TrimSpace(p) + " — " + nextP
-				chunkChapter = currentChapter
+				proposed := strings.TrimSpace(p) + " — " + nextP
+				if acceptHeader(proposed) {
+					flush()
+					currentChapter = proposed
+					chunkChapter = currentChapter
+				}
 				continue
 			}
 		}
@@ -131,12 +162,17 @@ func Split(text string, opts Options) []Chunk {
 			continue
 		}
 
-		// ── All-caps fallback header ──────────────────────────────────────────
+		// -- All-caps fallback header -----------------------------------------
 		// Common in older public-domain texts (Project Gutenberg, sacred-texts).
-		if isAllCapsHeader(p) {
-			flush()
-			currentChapter = strings.TrimSpace(p)
-			chunkChapter = currentChapter
+		// Guard: skip if it matches a known title fragment (running page footer)
+		// so that "THE CUSTODIANS" on every page footer doesn't hijack labels.
+		if isAllCapsHeader(p) && !isFooterEcho(p) {
+			proposed := strings.TrimSpace(p)
+			if acceptHeader(proposed) {
+				flush()
+				currentChapter = proposed
+				chunkChapter = currentChapter
+			}
 			continue
 		}
 
@@ -147,6 +183,7 @@ func Split(text string, opts Options) []Chunk {
 			chunkChapter = currentChapter
 			cur.WriteString(p)
 			curTokens = pTokens
+			tokensSinceHeader += pTokens
 			flush()
 			continue
 		}
@@ -163,6 +200,7 @@ func Split(text string, opts Options) []Chunk {
 		}
 		cur.WriteString(p)
 		curTokens += pTokens
+		tokensSinceHeader += pTokens
 	}
 	flush()
 
@@ -233,6 +271,11 @@ func isAllCapsHeader(p string) bool {
 	if n < 8 || n > 120 {
 		return false
 	}
+	// Reject author-attribution lines like "ROBERT FROST (1875-1963)".
+	// These end with a parenthesized year or year range.
+	if regexp.MustCompile(`\(\d{3,4}[-` + "`" + `\-]?\d{0,4}\)\s*$`).MatchString(trimmed) {
+		return false
+	}
 	letters := 0
 	spaces := 0
 	for _, r := range trimmed {
@@ -255,4 +298,24 @@ func isAllCapsHeader(p string) bool {
 		return false
 	}
 	return true
+}
+
+// buildTitleFragments returns an uppercase set of strings derived from the
+// source title that are likely to appear as running page-footer echoes.
+// e.g. "The Custodians: Beyond Abduction" produces:
+//
+//	{"THE CUSTODIANS", "BEYOND ABDUCTION", "THE CUSTODIANS: BEYOND ABDUCTION"}
+func buildTitleFragments(title string) map[string]bool {
+	frags := make(map[string]bool)
+	if strings.TrimSpace(title) == "" {
+		return frags
+	}
+	frags[strings.ToUpper(strings.TrimSpace(title))] = true
+	for _, sep := range []string{": ", " - ", " \u2014 ", " \u2013 "} {
+		if idx := strings.Index(title, sep); idx != -1 {
+			frags[strings.ToUpper(strings.TrimSpace(title[:idx]))] = true
+			frags[strings.ToUpper(strings.TrimSpace(title[idx+len(sep):]))] = true
+		}
+	}
+	return frags
 }

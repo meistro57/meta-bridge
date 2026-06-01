@@ -25,7 +25,7 @@ Usage:
   python reflect.py                           # run it, resumes automatically
   python reflect.py --limit 20                # only process first N new chunks (sanity test)
   python reflect.py --workers 3               # concurrent model calls (default 2)
-  python reflect.py --model google/gemma-4-31b-it
+  python reflect.py --model google/gemini-3.1-flash-lite
   python reflect.py --model ollama:gemma4:latest
   python reflect.py --from-scratch            # wipe meta_reflections and start over
 """
@@ -83,7 +83,7 @@ SOURCE_COLLECTIONS = tuple(
 TARGET_COLLECTION = "meta_reflections"
 EMBED_PROVIDER = os.environ.get("MB_EMBED_PROVIDER", "openrouter").strip().lower()
 EMBED_MODEL = os.environ.get("MB_EMBED_MODEL", "nomic-embed-text:latest")
-DEFAULT_MODEL = os.environ.get("MB_MODEL", "google/gemma-4-31b-it").strip() or "google/gemma-4-31b-it"
+DEFAULT_MODEL = os.environ.get("MB_MODEL", "google/gemini-3.1-flash-lite").strip() or "google/gemini-3.1-flash-lite"
 SCHEMA_VERSION = "2"
 PROMPT_VERSION = "1"
 SUMMARY_VECTOR_NAME = "summary_vec"
@@ -746,6 +746,15 @@ def resolve_chunk_source_id(
     return ""
 
 
+# Optional comma-separated source_id filter for parallel workers.
+# Set via env: MB_REFLECT_SOURCE_FILTER=seth_speaks,root_access
+REFLECT_SOURCE_FILTER: frozenset[str] = frozenset(
+    s.strip()
+    for s in os.environ.get("MB_REFLECT_SOURCE_FILTER", "").split(",")
+    if s.strip()
+)
+
+
 def iter_chunks(
     source_collections: tuple[str, ...],
     skip: set[tuple[str, str]],
@@ -768,6 +777,9 @@ def iter_chunks(
                     continue
                 source_file = source_file_name(pl, attr)
                 source_id = resolve_chunk_source_id(source_collection, pid, pl, attr, source_file, source_ids)
+                # Respect parallel worker source partition filter.
+                if REFLECT_SOURCE_FILTER and source_id not in REFLECT_SOURCE_FILTER and source_file not in REFLECT_SOURCE_FILTER:
+                    continue
                 yield Chunk(
                     source_collection=source_collection,
                     point_id=pid,
@@ -788,7 +800,7 @@ def main() -> int:
     global CURRENT_MODEL, STOP
 
     parser = argparse.ArgumentParser(description="Reflect on source chunks and claims")
-    parser.add_argument("--model", default=DEFAULT_MODEL, help="Model name (default: OpenRouter google/gemma-4-31b-it; override with ollama:<model>)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help=f"Model name (default: OpenRouter {DEFAULT_MODEL}; override with ollama:<model>)")
     parser.add_argument("--limit", type=int, default=0, help="process at most N new chunks")
     parser.add_argument("--workers", type=int, default=2, help="concurrent model calls")
     parser.add_argument("--source-collections", default="", help="comma-separated source collections")

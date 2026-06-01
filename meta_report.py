@@ -50,7 +50,7 @@ MODEL = (
 )
 COLLECTION = "mb_chunks"  # overridden at runtime by select_collection()
 QUERY = "Do different authors agree that thoughts create reality?"
-LIMIT = 8
+LIMIT = 18
 OUTPUT_FILE = "meta_report.txt"
 TIMEOUT_EMBED = 120
 TIMEOUT_GENERATE = 300

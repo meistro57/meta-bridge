@@ -26,9 +26,9 @@ Run:
     python reflect_loop.py --limit 20
 
 Optional:
-    python reflect_loop.py --model google/gemma-4-31b-it
+    python reflect_loop.py --model google/gemini-3.1-flash-lite
     python reflect_loop.py --limit 50 --goal "hunt contradictions across consciousness claims"
-    python reflect_loop.py --target-collection meta_reflection_loop_test
+    python reflect_loop.py --target-collection meta_reflections
     python reflect_loop.py --loop-interval 60 --max-loops 0
     python reflect_loop.py --from-scratch
 """
@@ -54,6 +54,7 @@ import reflect as rf
 
 
 DEFAULT_TARGET_COLLECTION = "meta_reflections"
+STABLE_TARGET_COLLECTION = "meta_reflections"
 
 
 class LoopState(TypedDict, total=False):
@@ -86,7 +87,7 @@ def validate_remote_config(model: str) -> None:
     if model.startswith("ollama:"):
         raise RuntimeError(
             "Local Ollama model requested, but this runner is configured for remote use. "
-            "Use an OpenRouter model like: google/gemma-4-31b-it"
+            "Use an OpenRouter model like: google/gemini-3.1-flash-lite"
         )
 
     if not rf.OPENROUTER_API_KEY:
@@ -109,6 +110,11 @@ def validate_target_collection(name: str) -> str:
     cleaned = name.strip()
     if not cleaned:
         raise RuntimeError("--target-collection cannot be empty")
+    if cleaned == STABLE_TARGET_COLLECTION:
+        print(
+            f"[warn] writing into stable production collection '{STABLE_TARGET_COLLECTION}'. "
+            f"Pass --target-collection {DEFAULT_TARGET_COLLECTION} for isolated test runs."
+        )
     return cleaned
 
 
