@@ -205,6 +205,33 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body any)
 	return raw, resp.StatusCode, nil
 }
 
+// SetChunkGraphability patches the graphability metadata onto an existing
+// mb_chunks point. Called after UpsertChunk so the payload fields exist.
+//
+//	- score:     e.g. "very_high", "low", "unknown"
+//	- extracted: true if this chunk was sent to the LLM extractor
+//	- gap:       true if the chapter was not in the graphability index
+func (c *Client) SetChunkGraphability(ctx context.Context, sourceID string, chunkIdx int, score string, extracted bool, gap bool) error {
+	key := chunkPointKey(sourceID, chunkIdx)
+	pointID := pointIDForKey(key)
+
+	body := map[string]interface{}{
+		"payload": map[string]interface{}{
+			"graphability_score":     score,
+			"graphability_extracted": extracted,
+			"graphability_gap":       gap,
+		},
+		"points": []uint64{pointID},
+	}
+
+	_, _, err := c.request(ctx, http.MethodPost,
+		fmt.Sprintf("/collections/%s/points/payload", CollectionChunks), body)
+	if err != nil {
+		return fmt.Errorf("set chunk graphability: %w", err)
+	}
+	return nil
+}
+
 func chunkPointKey(sourceID string, idx int) string {
 	return fmt.Sprintf("%s_chunk_%04d", sourceID, idx)
 }

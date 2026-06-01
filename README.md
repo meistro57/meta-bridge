@@ -188,9 +188,32 @@ Output: `<report>.scored.json` — per-bridge scores plus a summary block.
 
 ---
 
+### Corpus audit and cleanup
+
+```bash
+# Audit only — no changes
+python corpus_cleanup.py
+
+# Fix everything non-destructive in one shot (reconcile counts + delete Zone.Identifier files + orphans)
+python corpus_cleanup.py --fix-all
+
+# Individual fix modes
+python corpus_cleanup.py --fix-counts    # reconcile source chunk/claim counts
+python corpus_cleanup.py --fix-zones     # delete Zone.Identifier ghost files
+python corpus_cleanup.py --fix-orphans   # delete orphaned chunks
+
+# Write full JSON report
+python corpus_cleanup.py --report
+```
+
+---
+
 ### Utilities
 
 ```bash
+# Force-rebuild all binaries
+./rebuild.sh
+
 # List all source IDs currently in Qdrant
 python get_sources.py
 
@@ -214,6 +237,59 @@ Full object schemas, bridge taxonomy, and query primitives: [`ARCHITECTURE.md`](
 
 ---
 
+## Graphability Scoring
+
+Meta Bridge uses a **Graphability Index** to predict which chunks are worth sending to the LLM for claim extraction — and which are boilerplate noise. The approach is adapted from the [Proxy-Pointer RAG technique](https://towardsdatascience.com/proxy-pointer-rag-eliminating-wasteful-entity-relations-extraction-in-knowledge-graphs/) for Knowledge Graph ingestion cost reduction.
+
+The index scores each chunk by *relational density* — how many actionable semantic edges the section is likely to produce — not raw entity count. A chapter packed with character names scores lower than one containing cosmological law statements.
+
+### Score tiers
+
+| Score | Action | Examples |
+|-------|--------|----------|
+| `very_high` | Always extract | Session transcripts, Law statements, Soul origin passages, Cosmological hierarchy, Density/octave descriptions |
+| `high` | Extract | Practitioner commentary, Entity taxonomy, Higher-self mechanics, Sacred site descriptions |
+| `medium` | Extract | Author reflections, Case narratives, Thematic summaries, Historical context |
+| `low` | **Skip** | Author bio notes, Session setup, Procedural instructions, Personal anecdotes |
+| `very_low` | **Skip** | Copyright pages, Dedications, Table of contents, Bibliography, Publisher forewords |
+| `unknown` | Mandatory scan + flag | Section not in index — coverage gap, reported to `misfit_reports` |
+
+### Corpus anchors
+
+Certain section types are **always** `very_high` regardless of apparent density — they define the ontological inheritance structure for everything else. These include Law of One session openings, Seth chapter headers, Dolores Cannon chapter openings (form-feed boundaries), Urantia Papers, Upanishads, Book of the Dead spells, and species profile entries from the alien races encyclopedia.
+
+### Usage
+
+Enabled by default. The scorer loads `graphability_index.json` from the project root on startup.
+
+```bash
+# Normal run — graphability scoring active (default: skip low + very_low)
+./mb ingest /path/to/source.pdf
+
+# Raise the floor — only extract high + very_high
+MB_GRAPHABILITY_MIN=high ./mb ingest /path/to/source.pdf
+
+# Disable entirely — scan everything (old behaviour)
+MB_SKIP_GRAPHABILITY=1 ./mb ingest /path/to/source.pdf
+
+# Use a custom index for a specific corpus
+MB_GRAPHABILITY_INDEX=/path/to/custom_index.json ./mb ingest /path/to/source.pdf
+```
+
+At the end of each ingest run, the summary line reports savings:
+
+```
+graphability:  12 skipped / 35 extracted / 4 gaps (25.5% token saving)
+```
+
+### Coverage gaps
+
+Chunks whose chapter label doesn't match any index entry are logged as `[graphability=GAP]` and flagged in the `mb_chunks` Qdrant payload with `graphability_gap=true`. After a few ingest runs, review the gap log and add recurring generic sections to `graphability_index.json`. The index stabilizes quickly — target under 20% gaps after ~10 books.
+
+The index file lives at `graphability_index.json` in the project root and is plain JSON — edit it directly to tune coverage for your corpus.
+
+---
+
 ## Project Layout
 
 ```
@@ -226,7 +302,11 @@ internal/
   claim/                    Claim + Attribution types
   llm/                      Minimal OpenRouter client
   extractor/                LLM-driven claim extraction
+  graphability/             Graphability scorer — label + content keyword scoring
   store/                    Qdrant persistence layer (Wave 2)
+graphability_index.json     Consciousness corpus graphability index (edit to tune coverage)
+corpus_cleanup.py           Corpus audit and repair tool — count reconciliation, orphan detection, Zone.Identifier cleanup
+rebuild.sh                  Force-rebuild all binaries (runs go build -a)
 scoring/
   reality_filter.py         Epistemic bridge scoring (type, flags, testability)
   reality_filter_prompt.md  LLM rubric for the Reality Filter
@@ -262,3 +342,6 @@ reflect_failures/           Failed reflection JSON artifacts (for debugging)
 | `MB_AUTHOR` | — | Human author or scribe |
 | `MB_MAX_CHUNKS` | — | Limit extraction to first N chunks — useful for prompt tuning |
 | `MB_OUTPUT_DIR` | `./output` | Output directory for `.source.json`, `.chunks.json`, `.claims.json` |
+| `MB_GRAPHABILITY_INDEX` | `./graphability_index.json` | Path to graphability index JSON |
+| `MB_GRAPHABILITY_MIN` | `medium` | Minimum score tier to extract — `very_high`, `high`, or `medium` |
+| `MB_SKIP_GRAPHABILITY` | — | Set to `1` to disable scoring and extract all chunks |
