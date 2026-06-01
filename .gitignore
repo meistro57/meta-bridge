@@ -22,3 +22,8 @@
 
 # pdf
 *.pdf
+corpus_audit.json
+__pycache__/
+logs/
+mb
+mb-academic-test
