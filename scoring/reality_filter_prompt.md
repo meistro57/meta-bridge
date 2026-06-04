@@ -4,6 +4,8 @@ You are evaluating a **semantic bridge** between two knowledge domains found in 
 
 A "bridge" is a claimed conceptual connection between two clusters of text chunks. Your job is to classify the bridge and assess its epistemic quality.
 
+The bridge candidates may come from dense retrieval, sparse keyword retrieval, or a fused hybrid ranking; evaluate only the claim content and evidence quality.
+
 ## Input
 
 You will receive:

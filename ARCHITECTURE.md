@@ -290,6 +290,16 @@ Given a Meta Bridge claim, return translation bridges to KAE/external nodes. Giv
 
 Return claims with exactly one source attribution, filtered to those with sufficient specificity to be meaningful (not trivial statements, not near-duplicates of well-attributed claims). *"What does only Cannon say? What does only the Cassiopaeans say?"* Orphans are not dismissed — they are flagged for attention.
 
+## Retrieval Layer (Hybrid)
+
+`mb_claims` retrieval now uses a hybrid strategy for better terminology recall and better semantic coverage:
+
+1. Dense vector query over existing claim embeddings (OpenRouter embeddings API, `google/gemini-embedding-001` default).
+2. Sparse fallback via Qdrant text matching (`MatchText`) against indexed `canonical_statement`.
+3. Reciprocal Rank Fusion (RRF, `k=60`) merges both ranked sets into final top-k.
+
+Filter performance is protected by payload indexes on source/tag/entity/status/chapter fields.
+
 ---
 
 ## Interface to KAE
@@ -328,6 +338,9 @@ Deliberately matches the KAE stack so infrastructure is shared and familiar:
 
 - **Language:** Go (primary), with Python for specific LLM-heavy passes if library support matters.
 - **Vector store:** Qdrant. Collections: `mb_sources`, `mb_chunks`, `mb_claims`, `mb_bridges`. Test collections use `_test` suffix; the reflection loop uses `meta_reflection_loop_test`.
+  - Payload indexes are provisioned by `add_payload_indexes.py` for source/tag/entity/chapter/tradition filters.
+  - `mb_claims.canonical_statement` has a text index (WORD tokenizer) for exact-term sparse retrieval fallback.
+  - `hybrid_search.py` performs dense + sparse retrieval with RRF fusion for higher recall on exact terminology.
 - **LLM:** OpenRouter. DeepSeek R1 for reasoning passes (dedup judgment, entailment, contradiction detection). Gemini Flash for bulk extraction and classification. Gemma 4 for reflection and reality filter scoring.
 - **Local LLM fallback:** Ollama with Qwen2.5-Coder:32b on the BOXX, for passes where API cost is an issue at scale.
 - **Reflection loop:** LangGraph (`reflect_loop.py`) drives a stateful multi-iteration reflection pass. Distinct from the one-shot `reflect.py` batch pass (defaults: `mb_chunks`,`mb_claims` → `meta_reflections`; resume dedup keyed by `source_hash`) — useful for goal-directed hunts (e.g., "find contradictions") without modifying stable collections.

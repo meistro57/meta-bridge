@@ -33,6 +33,22 @@ The output is not a search engine. It is a **bridge catalog**.
 
 ---
 
+## What's New — Qdrant Hybrid Search Upgrade
+
+- Added idempotent payload indexing utility: `add_payload_indexes.py`.
+  - `mb_claims`: `attributions[].source_id`, `tags[]`, `entity_type`, `editorial_status`, `chapter`
+  - `mb_chunks`: `source_id`, `chapter`
+  - `mb_sources`: `source_id`, `tradition`
+- Added full-text payload index on `mb_claims.canonical_statement` with `TokenizerType.WORD` for exact-term fallback retrieval.
+- Added reusable hybrid retrieval module: `hybrid_search.py`.
+  - Dense semantic search (OpenRouter embeddings, `google/gemini-embedding-001` by default)
+  - Sparse keyword fallback (`MatchText` over `canonical_statement`)
+  - Reciprocal Rank Fusion (RRF, `k=60`) to combine dense + sparse rankings
+  - Optional `source_filter` support to constrain by source IDs
+  - Returns top-N results with canonical statement, attribution source IDs/surface quotes, and tags
+
+---
+
 ## Quick Start
 
 ```bash
@@ -132,6 +148,30 @@ python3 academic_ingest_test.py incoming/textbook.pdf
 ```
 
 The academic chunker detects numbered section headers (`1.2.3 Title`), `Chapter N` headers, filters TOC lines and running page headers, and keeps equations grouped with surrounding prose.
+
+---
+
+### Hybrid search utilities
+
+```bash
+# Ensure Qdrant payload/text indexes exist (safe to re-run)
+python add_payload_indexes.py
+
+# Run bundled CLI test query and print top 5 fused results
+python hybrid_search.py
+```
+
+Programmatic usage:
+
+```python
+from hybrid_search import hybrid_search
+
+results = hybrid_search(
+    "volunteer souls struggling with third density linear reality",
+    top_k=10,
+    source_filter=["root_access", "seth_speaks"],
+)
+```
 
 ---
 
@@ -317,6 +357,8 @@ mcp/                        MCP server dependencies (Qdrant, Redis)
 reflect.py                  Reflection pass over Qdrant chunks
 reflect_loop.py             LangGraph stateful/timer reflection loop runner
 meta_report.py              Synthesis report generator
+add_payload_indexes.py      Idempotent payload/text index provisioning for Qdrant
+hybrid_search.py            Dense+sparse hybrid claim retrieval with RRF fusion
 academic_ingest_test.py     Python academic ingest to Qdrant _test collections
 get_sources.py              List ingested source IDs from Qdrant
 reflect_failures/           Failed reflection JSON artifacts (for debugging)
@@ -336,6 +378,7 @@ reflect_failures/           Failed reflection JSON artifacts (for debugging)
 | `MB_FILTER_MODEL` | `MB_MODEL` | Override model for `reality_filter.py` |
 | `MB_EMBED_PROVIDER` | `openrouter` | Embedding backend — `openrouter` or `ollama` |
 | `MB_EMBED_MODEL` | `openai/text-embedding-3-small` | Embedding model name |
+| `EMBEDDING_MODEL` | `google/gemini-embedding-001` | Embedding model for `hybrid_search.py` |
 | `MB_EMBED_MAX_CHARS` | `8000` | Max chars per embedding payload |
 | `MB_HEADER_PATTERN` | auto | Regex override for chapter/session/part header detection |
 | `MB_SOURCE_ID` | — | Stable ID for the source being ingested (e.g. `seth_speaks`) |
