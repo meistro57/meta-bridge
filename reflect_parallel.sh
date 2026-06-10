@@ -8,6 +8,9 @@
 #   ./reflect_parallel.sh --workers 4 --threads 3
 #   ./reflect_parallel.sh --limit 100
 #   ./reflect_parallel.sh --model google/gemini-3.1-flash-lite
+#   ./reflect_parallel.sh --throttle-check 60   # poll optimizer every N seconds (default: 30)
+#   ./reflect_parallel.sh --throttle-sleep 10   # sleep N seconds when yellow (default: 8)
+#   ./reflect_parallel.sh --no-throttle         # disable adaptive throttling entirely
 #
 # Logs: logs/reflect_worker_N.log
 # Ctrl-C kills all workers cleanly.
@@ -20,18 +23,101 @@ THREADS=2
 LIMIT=0
 MODEL="google/gemini-3.1-flash-lite"
 LOG_DIR="logs"
+THROTTLE_CHECK=30      # seconds between optimizer status polls
+THROTTLE_SLEEP=8       # seconds to pause all workers when optimizer is busy
+THROTTLE_ENABLED=true  # set false via --no-throttle
 
 # ── parse args ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --workers)  WORKERS="$2";  shift 2 ;;
-        --threads)  THREADS="$2";  shift 2 ;;
-        --limit)    LIMIT="$2";    shift 2 ;;
-        --model)    MODEL="$2";    shift 2 ;;
-        --log-dir)  LOG_DIR="$2";  shift 2 ;;
+        --workers)         WORKERS="$2";        shift 2 ;;
+        --threads)         THREADS="$2";        shift 2 ;;
+        --limit)           LIMIT="$2";          shift 2 ;;
+        --model)           MODEL="$2";          shift 2 ;;
+        --log-dir)         LOG_DIR="$2";        shift 2 ;;
+        --throttle-check)  THROTTLE_CHECK="$2"; shift 2 ;;
+        --throttle-sleep)  THROTTLE_SLEEP="$2"; shift 2 ;;
+        --no-throttle)     THROTTLE_ENABLED=false; shift ;;
         *) echo "[!] unknown arg: $1"; exit 1 ;;
     esac
 done
+
+# ── qdrant optimizer health check ─────────────────────────────────────────────
+# Returns "green", "yellow", or "unknown" for meta_reflections.
+qdrant_optimizer_status() {
+    python3 - <<'PYEOF'
+import os, sys, requests
+
+def load_env():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip(); v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+load_env()
+url  = os.environ.get("QDRANT_URL", "http://localhost:6333")
+key  = os.environ.get("QDRANT_API_KEY", "").strip()
+hdrs = {"api-key": key} if key else {}
+
+try:
+    r = requests.get(f"{url}/collections/meta_reflections", headers=hdrs, timeout=10)
+    if r.status_code != 200:
+        print("unknown"); sys.exit(0)
+    data   = r.json()
+    status = data.get("result", {}).get("status", "unknown")
+    opt    = data.get("result", {}).get("optimizer_status", "unknown")
+    if status == "yellow" or (isinstance(opt, dict) and opt.get("ok") is False):
+        print("yellow")
+    elif status == "green":
+        print("green")
+    else:
+        print("unknown")
+except Exception:
+    print("unknown")
+PYEOF
+}
+
+# ── adaptive throttle monitor (background) ────────────────────────────────────
+# Polls Qdrant every THROTTLE_CHECK seconds. When meta_reflections goes yellow,
+# sends SIGSTOP to all worker PIDs to freeze them, waits THROTTLE_SLEEP seconds,
+# then sends SIGCONT to resume. Workers wake up exactly where they left off.
+throttle_monitor() {
+    local -n _pids=$1
+    while true; do
+        sleep "$THROTTLE_CHECK"
+
+        local alive=0
+        for pid in "${_pids[@]}"; do
+            kill -0 "$pid" 2>/dev/null && ((alive++)) || true
+        done
+        [[ $alive -eq 0 ]] && break
+
+        local status
+        status=$(qdrant_optimizer_status)
+
+        if [[ "$status" == "yellow" ]]; then
+            echo "[throttle] meta_reflections is yellow — pausing $alive workers for ${THROTTLE_SLEEP}s"
+            for pid in "${_pids[@]}"; do
+                kill -STOP "$pid" 2>/dev/null || true
+            done
+            sleep "$THROTTLE_SLEEP"
+            for pid in "${_pids[@]}"; do
+                kill -CONT "$pid" 2>/dev/null || true
+            done
+            echo "[throttle] workers resumed (optimizer caught up)"
+        else
+            echo "[throttle] meta_reflections=${status} — all clear"
+        fi
+    done
+}
 
 mkdir -p "$LOG_DIR"
 
@@ -118,13 +204,17 @@ done
 # ── launch workers ────────────────────────────────────────────────────────────
 PIDS=()
 LOGFILES=()
+THROTTLE_PID=""
 
 cleanup() {
     echo ""
     echo "[reflect_parallel] shutting down workers..."
+    # resume any frozen workers before killing so nothing gets stuck
     for pid in "${PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
+        kill -CONT "$pid" 2>/dev/null || true
+        kill       "$pid" 2>/dev/null || true
     done
+    [[ -n "${THROTTLE_PID}" ]] && kill "$THROTTLE_PID" 2>/dev/null || true
     wait 2>/dev/null || true
     echo "[reflect_parallel] done"
 }
@@ -162,6 +252,16 @@ done
 
 echo ""
 echo "[reflect_parallel] ${#PIDS[@]} workers running (PIDs: ${PIDS[*]})"
+
+# ── start throttle monitor ─────────────────────────────────────────────────────
+if [[ "$THROTTLE_ENABLED" == "true" && ${#PIDS[@]} -gt 0 ]]; then
+    echo "[reflect_parallel] throttle monitor ON (check every ${THROTTLE_CHECK}s, sleep ${THROTTLE_SLEEP}s on yellow)"
+    throttle_monitor PIDS >> "$LOG_DIR/throttle.log" 2>&1 &
+    THROTTLE_PID=$!
+else
+    echo "[reflect_parallel] throttle monitor OFF"
+fi
+
 echo ""
 echo "Watch all logs:"
 echo "  tail -f $LOG_DIR/reflect_worker_*.log"
@@ -170,11 +270,16 @@ echo "Watch one:"
 for ((i=0; i<${#LOGFILES[@]}; i++)); do
     echo "  tail -f ${LOGFILES[$i]}"
 done
+if [[ "$THROTTLE_ENABLED" == "true" ]]; then
+    echo ""
+    echo "Watch throttle:"
+    echo "  tail -f $LOG_DIR/throttle.log"
+fi
 echo ""
 echo "Ctrl-C to stop all workers"
 echo ""
 
-# wait for all
+# wait for all workers
 for pid in "${PIDS[@]}"; do
     wait "$pid" 2>/dev/null || true
 done

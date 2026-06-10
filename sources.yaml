@@ -586,6 +586,16 @@ sources:
     file: "A-Dweller-on-Two-Planets,-by-Phylos-the-Thibetan-(Frederick-S.-Oliver),-[1894].txt"
     notes: "Channeled Atlantis narrative — one of the earliest channeled books in the modern tradition"
 
+  - id: an_earth_dwellers_return
+    title: "An Earth Dweller's Return"
+    author: "Phylos the Thibetan"
+    year: 1940
+    channel_type: channeled
+    tradition: "Lemurian Fellowship"
+    medium: "Phylos"
+    file: "An-Earth-Dwellers-Return-1-ocr.pdf"
+    notes: "Sequel to A Dweller on Two Planets — OCR version of scanned original"
+
   - id: the_oera_linda_book
     title: "The Oera Linda Book"
     author: "William R. Sandbach (translator)"
@@ -604,6 +614,26 @@ sources:
     tradition: "Atlantean"
     medium: "Selestor"
     file: "Selestor's-Men-of-Atlantis,-by-Clara-Iza-von-Ravn,-[1937].txt"
+
+  # ── Ashayana Deane / Guardian Alliance ────────────────────────────────────
+  - id: angelic_realities
+    title: "Angelic Realities: The Survival Handbook"
+    author: "Ashayana Deane"
+    year: 2001
+    channel_type: channeled
+    tradition: "Emerald Order Melchizedek Cloister"
+    medium: "EOMC Priests of UR"
+    file: "[Ashayana_deane]_Angelic_realities(z-lib.org).pdf"
+
+  - id: voyagers_ii_amenti
+    title: "Voyagers II: The Secrets of Amenti"
+    author: "Ashayana Deane (Anna Hayes)"
+    year: 2002
+    channel_type: channeled
+    tradition: "Emerald Order Melchizedek Cloister"
+    medium: "Guardian Alliance"
+    file: "voyagers_ii_ocr.pdf"
+    notes: "OCR version — original PDF had no extractable text layer (Ghostscript image-only)"
 
   # ── Babylonian / Mesopotamian ──────────────────────────────────────────────
   - id: myths_of_babylonia_and_assyria
@@ -884,3 +914,67 @@ sources:
     tradition: ""
     medium: ""
     file: "Sun-Lore-of-All-Ages,-by-William-Tyler-Olcott,-[1914].txt"
+
+  # ── 2026-06-09 batch ──────────────────────────────────────────────────────
+  - id: when_the_body_says_no_by_gabor_mate_1
+    title: "When the Body Says No: The Cost of Hidden Stress"
+    author: "Gabor Maté"
+    year: 2003
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "When-the-Body-Says-No-by-Gabor-Mate-1.pdf"
+
+  - id: in_search_of_the_miraculous_ocr
+    title: "In Search of the Miraculous: Fragments of an Unknown Teaching"
+    author: "P.D. Ouspensky"
+    year: 1949
+    channel_type: authored
+    tradition: "Fourth Way/Gurdjieff"
+    medium: ""
+    file: "In-Search-Of-The-Miraculous-ocr.pdf"
+
+  - id: bashar_channeled_by_darryl_anka_complete_transcripts
+    title: "Bashar: Channeled Transcripts 1985-1997"
+    author: "Darryl Anka"
+    year: 0
+    channel_type: channeled
+    tradition: "Bashar/Essassani"
+    medium: "Bashar"
+    file: "Bashar-Channeled-by-Darryl-Anka-Complete-Transcripts.pdf"
+
+  - id: the_bhagavad_gita
+    title: "The Bhagavad Gita"
+    author: "Vyasa (trans. Giridhar Boray)"
+    year: 0
+    channel_type: authored
+    tradition: "Vedanta/Hindu"
+    medium: ""
+    file: "The-Bhagavad-Gita.pdf"
+
+  - id: davidbohm_wholenessandtheimplicateorder
+    title: "Wholeness and the Implicate Order"
+    author: "David Bohm"
+    year: 1980
+    channel_type: authored
+    tradition: ""
+    medium: ""
+    file: "DavidBohm-WholenessAndTheImplicateOrder.pdf"
+
+  - id: feeling_is_the_secret_by_neville_goddard
+    title: "Feeling is the Secret"
+    author: "Neville Goddard"
+    year: 1944
+    channel_type: authored
+    tradition: "New Thought"
+    medium: ""
+    file: "Feeling-is-the-Secret-by-Neville-Goddard.pdf"
+
+  - id: neville_the_power_of_awareness
+    title: "The Power of Awareness"
+    author: "Neville Goddard"
+    year: 1952
+    channel_type: authored
+    tradition: "New Thought"
+    medium: ""
+    file: "Neville-The-Power-of-Awareness.pdf"

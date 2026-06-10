@@ -54,24 +54,40 @@ import reflect as rf
 
 
 DEFAULT_TARGET_COLLECTION = "meta_reflections"
-STABLE_TARGET_COLLECTION = "meta_reflections"
+STABLE_TARGET_COLLECTION  = "meta_reflections"
+
+# Payload fields written back to meta_reflections per processed chunk.
+FLAG_INTERESTING   = "loop_interesting"
+FLAG_CONTRADICTION = "loop_contradiction"
+FLAG_DECISION      = "loop_decision"
+FLAG_FLAGGED_AT    = "loop_flagged_at"
+
+FLAG_INDEXES: dict[str, str] = {
+    FLAG_INTERESTING:   "bool",
+    FLAG_CONTRADICTION: "bool",
+    FLAG_DECISION:      "keyword",
+    FLAG_FLAGGED_AT:    "integer",
+}
 
 
 class LoopState(TypedDict, total=False):
-    goal: str
-    model: str
-    current_chunk: Optional[rf.Chunk]
-    reflection: Dict[str, Any]
-    evaluation: Dict[str, Any]
-    decision: str
-    history: List[Dict[str, Any]]
-    interesting: List[Dict[str, Any]]
-    contradictions: List[Dict[str, Any]]
-    processed: int
-    errors: int
-    limit: int
-    done: bool
-    last_error: str
+    goal:             str
+    model:            str
+    current_chunk:    Optional[rf.Chunk]
+    current_point_id: Optional[str]       # uuid of the upserted reflection point
+    reflection:       Dict[str, Any]
+    evaluation:       Dict[str, Any]
+    decision:         str
+    history:          List[Dict[str, Any]]
+    interesting:      List[Dict[str, Any]]
+    contradictions:   List[Dict[str, Any]]
+    processed:        int
+    errors:           int
+    flags_written:    int                  # count of payload flag writes
+    limit:            int
+    done:             bool
+    last_error:       str
+    persist_flags:    bool                 # runtime toggle
 
 
 def validate_remote_config(model: str) -> None:
@@ -102,20 +118,52 @@ def validate_remote_config(model: str) -> None:
 
 
 def validate_target_collection(name: str) -> str:
-    """
-    Keep the test loop away from the stable production collection by default.
-    You can still override it deliberately if you really want to.
-    """
-
     cleaned = name.strip()
     if not cleaned:
         raise RuntimeError("--target-collection cannot be empty")
     if cleaned == STABLE_TARGET_COLLECTION:
         print(
             f"[warn] writing into stable production collection '{STABLE_TARGET_COLLECTION}'. "
-            f"Pass --target-collection {DEFAULT_TARGET_COLLECTION} for isolated test runs."
+            f"Pass --target-collection <other> for isolated test runs."
         )
     return cleaned
+
+
+# ──────────────────────────────────────── flag persistence ───────────────────
+
+def ensure_flag_indexes(target_collection: str) -> None:
+    """Create payload indexes for loop flag fields. Idempotent."""
+    for field_name, field_schema in FLAG_INDEXES.items():
+        try:
+            rf.qdrant(
+                "PUT",
+                f"/collections/{target_collection}/index",
+                {"field_name": field_name, "field_schema": field_schema},
+            )
+        except RuntimeError as e:
+            if "already exists" not in str(e).lower():
+                raise
+
+
+def persist_flags(point_id: str, decision: str, target_collection: str) -> None:
+    """
+    Merge loop decision flags onto an existing meta_reflections point.
+    Uses set_payload so no existing fields are touched.
+    Non-blocking (?wait=false).
+    """
+    rf.qdrant(
+        "POST",
+        f"/collections/{target_collection}/points/payload?wait=false",
+        {
+            "payload": {
+                FLAG_INTERESTING:   decision == "store_interesting",
+                FLAG_CONTRADICTION: decision == "track_contradiction",
+                FLAG_DECISION:      decision,
+                FLAG_FLAGGED_AT:    int(time.time()),
+            },
+            "points": [point_id],
+        },
+    )
 
 
 def detect_possible_contradiction(reflection: Dict[str, Any]) -> bool:
@@ -129,16 +177,9 @@ def detect_possible_contradiction(reflection: Dict[str, Any]) -> bool:
     claims = reflection.get("claims") or []
 
     contradiction_markers = [
-        "not ",
-        "never",
-        "cannot",
-        "opposite",
-        "contradict",
-        "conflict",
-        "but ",
-        "however",
-        "rather than",
-        "instead",
+        "not ", "never", "cannot", "opposite", "contradict",
+        "conflict", "but ", "however", "rather than", "instead",
+        "unlike", "deny", "denies", "reject", "rejects", "inconsistent",
     ]
 
     for claim in claims:
@@ -219,7 +260,7 @@ class ReflectLoopRuntime:
             return None
 
 
-def build_graph(runtime: ReflectLoopRuntime):
+def build_graph(runtime: ReflectLoopRuntime, target_collection: str):
     """
     Build the LangGraph loop:
 
@@ -233,25 +274,25 @@ def build_graph(runtime: ReflectLoopRuntime):
     graph = StateGraph(LoopState)
 
     def get_chunk_node(state: LoopState) -> LoopState:
-        state["reflection"] = {}
-        state["evaluation"] = {}
-        state["decision"] = ""
-        state["last_error"] = ""
+        state["reflection"]       = {}
+        state["evaluation"]       = {}
+        state["decision"]         = ""
+        state["last_error"]       = ""
+        state["current_point_id"] = None
 
         if state.get("processed", 0) >= state.get("limit", runtime.limit):
-            state["done"] = True
+            state["done"]          = True
             state["current_chunk"] = None
             return state
 
         chunk = runtime.get_next_chunk()
-
         if chunk is None:
-            state["done"] = True
+            state["done"]          = True
             state["current_chunk"] = None
             return state
 
         state["current_chunk"] = chunk
-        state["done"] = False
+        state["done"]          = False
         return state
 
     def route_after_get_chunk(state: LoopState) -> str:
@@ -267,16 +308,25 @@ def build_graph(runtime: ReflectLoopRuntime):
 
         try:
             reflection = rf.reflect_on_chunk(chunk, model)
-            vectors = rf.reflection_vectors(reflection)
+            vectors    = rf.reflection_vectors(reflection)
             rf.upsert_reflection(chunk, reflection, vectors)
 
-            state["reflection"] = reflection
-            state["last_error"] = ""
+            # Derive point ID the same way upsert_reflection does — no round-trip needed.
+            import uuid
+            point_id = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"reflection:{chunk.source_collection}:{chunk.point_id}",
+            ))
+
+            state["reflection"]       = reflection
+            state["current_point_id"] = point_id
+            state["last_error"]       = ""
 
         except Exception as exc:
-            state["errors"] = state.get("errors", 0) + 1
-            state["last_error"] = f"{type(exc).__name__}: {exc}"
-            state["reflection"] = {}
+            state["errors"]           = state.get("errors", 0) + 1
+            state["last_error"]       = f"{type(exc).__name__}: {exc}"
+            state["reflection"]       = {}
+            state["current_point_id"] = None
 
         return state
 
@@ -305,20 +355,30 @@ def build_graph(runtime: ReflectLoopRuntime):
 
     def act_node(state: LoopState) -> LoopState:
         reflection = state.get("reflection") or {}
-        decision = state.get("decision", "continue_scan")
+        decision   = state.get("decision", "continue_scan")
+        point_id   = state.get("current_point_id")
 
-        state.setdefault("history", [])
-        state.setdefault("interesting", [])
+        state.setdefault("history",        [])
+        state.setdefault("interesting",    [])
         state.setdefault("contradictions", [])
+        state.setdefault("flags_written",  0)
 
         if reflection:
             state["history"].append(reflection)
-
         if decision == "store_interesting" and reflection:
             state["interesting"].append(reflection)
-
         if decision == "track_contradiction" and reflection:
             state["contradictions"].append(reflection)
+
+        # ── persist flags back to the reflection point in Qdrant ──────────────
+        # Written for ALL decisions so downstream can filter by loop_decision.
+        # Best-effort — a write failure never kills the loop.
+        if state.get("persist_flags", True) and point_id and reflection:
+            try:
+                persist_flags(point_id, decision, target_collection)
+                state["flags_written"] = state["flags_written"] + 1
+            except Exception as exc:
+                print(f"    [flag] write failed for {point_id}: {exc}")
 
         state["processed"] = state.get("processed", 0) + 1
         return state
@@ -378,24 +438,35 @@ def print_step_summary(state: LoopState) -> None:
     claim_count = int(evaluation.get("claim_count", 0) or 0)
     concept_count = int(evaluation.get("concept_count", 0) or 0)
 
+    decision_icon = {
+        "store_interesting":   "★",
+        "track_contradiction": "⚡",
+        "continue_scan":       "·",
+    }.get(decision, "?")
+
     status = "✗" if last_error else "✓"
 
     print(
         f"[{processed}] {status} {source} "
         f"p{page} c{chunk_index} | "
-        f"decision={decision} | "
-        f"confidence={confidence:.3f} | "
-        f"claims={claim_count} | "
-        f"concepts={concept_count} | "
-        f"errors={errors}"
+        f"{decision_icon} {decision} | "
+        f"conf={confidence:.3f} claims={claim_count} concepts={concept_count} | "
+        f"errs={errors}"
     )
 
     if last_error:
         print(f"    error: {last_error}")
 
 
-def run_once(args: argparse.Namespace, model: str, target_collection: str, from_scratch: bool) -> tuple[LoopState, float]:
-    rf.CURRENT_MODEL = model
+def run_once(
+    args: argparse.Namespace,
+    model: str,
+    target_collection: str,
+    from_scratch: bool,
+    persist_flags: bool,
+) -> tuple[LoopState, float]:
+
+    rf.CURRENT_MODEL     = model
     rf.TARGET_COLLECTION = target_collection
 
     print("\n[config]")
@@ -405,51 +476,69 @@ def run_once(args: argparse.Namespace, model: str, target_collection: str, from_
     print(f"  embed_model:    {rf.EMBED_MODEL}")
     print(f"  target:         {rf.TARGET_COLLECTION}")
     print(f"  goal:           {args.goal}")
+    print(f"  persist_flags:  {persist_flags}")
 
     rf.ensure_target_collection(from_scratch)
     rf.ensure_target_indexes()
 
+    if persist_flags:
+        print("[init] ensuring loop flag indexes...")
+        ensure_flag_indexes(target_collection)
+
     runtime = ReflectLoopRuntime(limit=args.limit)
-    app = build_graph(runtime)
+    app     = build_graph(runtime, target_collection)
 
     initial_state: LoopState = {
-        "goal": args.goal,
-        "model": model,
-        "current_chunk": None,
-        "reflection": {},
-        "evaluation": {},
-        "decision": "",
-        "history": [],
-        "interesting": [],
-        "contradictions": [],
-        "processed": 0,
-        "errors": 0,
-        "limit": args.limit,
-        "done": False,
-        "last_error": "",
+        "goal":             args.goal,
+        "model":            model,
+        "current_chunk":    None,
+        "current_point_id": None,
+        "reflection":       {},
+        "evaluation":       {},
+        "decision":         "",
+        "history":          [],
+        "interesting":      [],
+        "contradictions":   [],
+        "processed":        0,
+        "errors":           0,
+        "flags_written":    0,
+        "limit":            args.limit,
+        "done":             False,
+        "last_error":       "",
+        "persist_flags":    persist_flags,
     }
 
     print("\n[loop] starting\n")
-
-    t0 = time.time()
+    t0           = time.time()
     final_state: LoopState = initial_state
 
     for state_update in app.stream(initial_state):
         for node_name, state in state_update.items():
             final_state = state
-
             if not args.quiet and node_name == "act":
                 print_step_summary(final_state)
 
     elapsed = time.time() - t0
 
+    interesting_count   = len(final_state.get("interesting",   []))
+    contradiction_count = len(final_state.get("contradictions",[]))
+    flags_written       = final_state.get("flags_written", 0)
+
     print("\n[done]")
     print(f"  target:          {rf.TARGET_COLLECTION}")
     print(f"  processed:       {final_state.get('processed', 0)}")
     print(f"  errors:          {final_state.get('errors', 0)}")
-    print(f"  interesting:     {len(final_state.get('interesting', []))}")
-    print(f"  contradictions:  {len(final_state.get('contradictions', []))}")
+    print(f"  interesting:     {interesting_count}")
+    print(f"  contradictions:  {contradiction_count}")
+    print(f"  flags_written:   {flags_written}")
     print(f"  elapsed:         {elapsed / 60:.1f}m")
+
+    if interesting_count > 0:
+        print(f"\n[flags] query interesting reflections:")
+        print(f'  filter: {{"must": [{{"key": "loop_interesting", "match": {{"value": true}}}}]}}')
+    if contradiction_count > 0:
+        print(f"\n[flags] query contradiction-flagged reflections:")
+        print(f'  filter: {{"must": [{{"key": "loop_contradiction", "match": {{"value": true}}}}]}}')
 
     return final_state, elapsed
 
@@ -506,11 +595,15 @@ def main() -> int:
         action="store_true",
         help="Wipe the target collection and rebuild from scratch",
     )
-
     parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress per-step output",
+    )
+    parser.add_argument(
+        "--no-persist-flags",
+        action="store_true",
+        help="Disable writing loop decision flags back to Qdrant",
     )
 
     args = parser.parse_args()
@@ -530,25 +623,24 @@ def main() -> int:
         raise RuntimeError("--max-loops must be >= 0")
 
     target_collection = validate_target_collection(args.target_collection)
-
     validate_remote_config(model)
 
+    persist_flags = not args.no_persist_flags
+
     if args.loop_interval <= 0:
-        final_state, _ = run_once(args, model, target_collection, args.from_scratch)
+        final_state, _ = run_once(args, model, target_collection, args.from_scratch, persist_flags)
         return 0 if final_state.get("errors", 0) == 0 else 1
 
-    run_count = 0
+    run_count    = 0
     total_errors = 0
 
     while True:
         run_count += 1
         print(f"\n[timer] run {run_count} starting")
-
         final_state, _ = run_once(
-            args,
-            model,
-            target_collection,
+            args, model, target_collection,
             args.from_scratch if run_count == 1 else False,
+            persist_flags,
         )
         total_errors += int(final_state.get("errors", 0) or 0)
 
