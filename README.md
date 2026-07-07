@@ -18,6 +18,15 @@ Sibling project to [KAE](https://github.com/meistro57/kae). Where KAE does archa
 The pipeline ingests a PDF, chunks the text, classifies segments by type, and runs an LLM-driven extraction pass that produces typed, attributed atomic claims. Bridges — scored links between claims — measure convergence across traditions, flag contradictions, and translate esoteric vocabulary into scientific or philosophical equivalents. An epistemic scoring layer (the **Reality Filter**) ensures the bridge catalog distinguishes structural mappings from speculative analogies.
 
 The output is not a search engine. It is a **bridge catalog**.
+Meta Bridge is the front door. Explore the rest of the pipeline...
+
+https://github.com/meistro57/vectoreologist
+
+https://github.com/meistro57/MisfitCrew
+
+https://github.com/meistro57/VectorView
+
+https://github.com/meistro57/ArchiMind
 
 ---
 
