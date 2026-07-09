@@ -1,0 +1,26 @@
+# requirements.txt
+# Runtime Python dependencies discovered from the repository's Python scripts.
+# Install with: python -m pip install -r requirements.txt
+
+# HTTP clients and environment configuration
+requests
+python-dotenv
+
+# Vector database client
+qdrant-client
+
+# PDF ingestion
+pypdf
+
+# Reflection workflow
+langgraph
+
+# Clustering and vector analysis utilities
+numpy
+scikit-learn
+umap-learn
+hdbscan
+tqdm
+
+# Test runner for the Python test suite
+pytest
