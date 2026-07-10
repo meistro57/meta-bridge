@@ -15,6 +15,18 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333").strip()
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "").strip() or None
 
 INDEXES: dict[str, list[tuple[str, Any]]] = {
+    "vectoreology_findings": [
+        ("type",       models.PayloadSchemaType.KEYWORD),
+        ("subject",    models.PayloadSchemaType.KEYWORD),
+        ("is_anomaly", models.PayloadSchemaType.BOOL),
+        ("confidence", models.PayloadSchemaType.FLOAT),
+        ("clusters",   models.PayloadSchemaType.KEYWORD),
+        ("stored_at",  models.PayloadSchemaType.KEYWORD),
+    ],
+    "misfit_reports": [
+        ("source_file", models.PayloadSchemaType.KEYWORD),
+        ("mined_at",    models.PayloadSchemaType.KEYWORD),
+    ],
     "mb_claims": [
         ("attributions[].source_id", models.PayloadSchemaType.KEYWORD),
         ("tags[]", models.PayloadSchemaType.KEYWORD),
@@ -34,8 +46,12 @@ INDEXES: dict[str, list[tuple[str, Any]]] = {
         ("chapter", models.PayloadSchemaType.KEYWORD),
     ],
     "mb_sources": [
-        ("source_id", models.PayloadSchemaType.KEYWORD),
-        ("tradition", models.PayloadSchemaType.KEYWORD),
+        ("id",           models.PayloadSchemaType.KEYWORD),
+        ("title",        models.PayloadSchemaType.KEYWORD),
+        ("tradition",    models.PayloadSchemaType.KEYWORD),
+        ("channel_type", models.PayloadSchemaType.KEYWORD),
+        ("entity_type",  models.PayloadSchemaType.KEYWORD),
+        ("author",       models.PayloadSchemaType.KEYWORD),
     ],
 }
 
@@ -121,7 +137,7 @@ def print_payload_schema(client: QdrantClient, collection_name: str) -> None:
 
 
 def main() -> None:
-    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+    client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=120)
 
     for collection_name, index_defs in INDEXES.items():
         ensure_indexes(client, collection_name, index_defs)

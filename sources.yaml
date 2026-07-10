@@ -978,3 +978,12 @@ sources:
     tradition: "New Thought"
     medium: ""
     file: "Neville-The-Power-of-Awareness.pdf"
+
+  - id: the_satanic_verses
+    title: "The Satanic Verses"
+    author: "Salman Rushdie"
+    year: 1988
+    channel_type: authored
+    tradition: "Magical Realism"
+    medium: ""
+    file: "The-Satanic-Verses.pdf"
