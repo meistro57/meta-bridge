@@ -526,19 +526,113 @@ class Chunk:
     text: str
 
 
+def strip_code_fences(raw: str) -> str:
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        cleaned = cleaned.rsplit("```", 1)[0].strip()
+    return cleaned
+
+
+def extract_json_object(raw: str) -> str:
+    start = raw.find("{")
+    if start < 0:
+        return raw
+
+    depth = 0
+    in_string = False
+    escape = False
+    for idx, ch in enumerate(raw[start:], start=start):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start:idx + 1]
+
+    return raw[start:]
+
+
+def sanitize_json_candidate(raw: str) -> str:
+    text = raw.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+
+    out: list[str] = []
+    in_string = False
+    escape = False
+    for ch in text:
+        if in_string:
+            if escape:
+                out.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+            if ch == "\n":
+                out.append("\\n")
+                continue
+            if ch == "\r":
+                out.append("\\r")
+                continue
+            if ch == "\t":
+                out.append("\\t")
+                continue
+            out.append(ch)
+            continue
+
+        out.append(ch)
+        if ch == '"':
+            in_string = True
+
+    text = "".join(out)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+    return text.strip()
+
+
 def parse_gemma(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw
-        raw = raw.rsplit("```", 1)[0].strip()
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end + 1])
-        raise
+    cleaned = strip_code_fences(raw)
+    candidates = [cleaned, extract_json_object(cleaned)]
+
+    last_error: json.JSONDecodeError | None = None
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+
+        for attempt in (candidate, sanitize_json_candidate(candidate)):
+            if not attempt:
+                continue
+            try:
+                data = json.loads(attempt)
+                if isinstance(data, dict):
+                    return data
+                raise json.JSONDecodeError("top-level JSON must be object", attempt, 0)
+            except json.JSONDecodeError as exc:
+                last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise json.JSONDecodeError("unable to parse reflection JSON", cleaned, 0)
 
 
 def normalize_text_list(items: list[str]) -> list[str]:
@@ -568,8 +662,21 @@ def reflection_confidence(reflection: dict) -> float:
 
 
 def reflect_on_chunk(chunk: Chunk, model: str) -> dict:
-    raw = complete(model, chunk.text, PROMPT)
-    data = parse_gemma(raw)
+    parse_error: Exception | None = None
+    data: dict | None = None
+
+    for _ in range(3):
+        raw = complete(model, chunk.text, PROMPT)
+        try:
+            data = parse_gemma(raw)
+            break
+        except json.JSONDecodeError as exc:
+            parse_error = exc
+
+    if data is None:
+        if parse_error is not None:
+            raise parse_error
+        raise RuntimeError("failed to parse reflection output")
 
     def as_list(v):
         if v is None:

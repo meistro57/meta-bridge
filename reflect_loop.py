@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
 # reflect_loop.py
 """
-LangGraph-style reflection loop for Meta-Bridge.
+Reflection loop for Meta-Bridge — plain-loop edition.
 
-This does NOT use local Ollama by default.
+History:
+    v1 wrapped reflect.py in a LangGraph StateGraph. Two structural problems:
+      1. LangGraph's default recursion_limit (25 super-steps) killed runs after
+         ~5 chunks (5 nodes per chunk) regardless of --limit.
+      2. State hoarded full reflection dicts in history/interesting/
+         contradictions lists on every step — unbounded memory for data
+         already persisted to Qdrant via loop flags.
+    v2 (this file) is a straight loop in the FrontPocket reflection_loop.py
+    shape: counters-only state, cheap-skip guard, graceful Ctrl-C, per-tone
+    and per-source stats, rate/ETA, and optional concurrency. Same CLI, same
+    loop_* flag persistence, same evaluate/decide semantics. langgraph is no
+    longer required.
 
-It reuses reflect.py for:
-- .env loading
-- OpenRouter API keys
-- Qdrant config
-- source collection discovery
-- reflection prompt
-- reflection parsing
-- embedding
-- Qdrant upsert
-
-Purpose:
-    Turn the current batch reflector into a stateful research loop without
-    tarnishing the stable meta_reflections collection.
+Reuses reflect.py for:
+    .env loading, OpenRouter API keys, Qdrant config and IO, source collection
+    discovery, reflection prompt + parsing, embedding, and upsert.
 
 Default target collection:
-    meta_reflection_loop_test
+    meta_reflections
 
 Run:
     python reflect_loop.py --limit 20
-
-Optional:
+    python reflect_loop.py --limit 200 --workers 3
     python reflect_loop.py --model google/gemini-3.1-flash-lite
-    python reflect_loop.py --limit 50 --goal "hunt contradictions across consciousness claims"
-    python reflect_loop.py --target-collection meta_reflections
+    python reflect_loop.py --goal "hunt contradictions across consciousness claims"
+    python reflect_loop.py --target-collection meta_reflection_loop_test
     python reflect_loop.py --loop-interval 60 --max-loops 0
     python reflect_loop.py --from-scratch
 """
@@ -36,27 +36,22 @@ Optional:
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 import time
-from typing import Any, Dict, List, Optional, TypedDict
-
-try:
-    from langgraph.graph import END, StateGraph
-except ImportError:
-    print(
-        "\n[missing] langgraph is not installed.\n\n"
-        "Install it with:\n"
-        "  pip install langgraph\n"
-    )
-    sys.exit(1)
+import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from typing import Any, Dict, Optional, Tuple
 
 import reflect as rf
 
 
 DEFAULT_TARGET_COLLECTION = "meta_reflections"
-STABLE_TARGET_COLLECTION  = "meta_reflections"
+STABLE_TARGET_COLLECTION = "meta_reflections"
 
-# Payload fields written back to meta_reflections per processed chunk.
+DEFAULT_MIN_TEXT_LEN = 20
+
+# Payload fields written back to the target collection per processed chunk.
 FLAG_INTERESTING   = "loop_interesting"
 FLAG_CONTRADICTION = "loop_contradiction"
 FLAG_DECISION      = "loop_decision"
@@ -69,37 +64,34 @@ FLAG_INDEXES: dict[str, str] = {
     FLAG_FLAGGED_AT:    "integer",
 }
 
+DECISION_ICONS = {
+    "store_interesting":   "★",
+    "track_contradiction": "⚡",
+    "continue_scan":       "·",
+}
 
-class LoopState(TypedDict, total=False):
-    goal:             str
-    model:            str
-    current_chunk:    Optional[rf.Chunk]
-    current_point_id: Optional[str]       # uuid of the upserted reflection point
-    reflection:       Dict[str, Any]
-    evaluation:       Dict[str, Any]
-    decision:         str
-    history:          List[Dict[str, Any]]
-    interesting:      List[Dict[str, Any]]
-    contradictions:   List[Dict[str, Any]]
-    processed:        int
-    errors:           int
-    flags_written:    int                  # count of payload flag writes
-    limit:            int
-    done:             bool
-    last_error:       str
-    persist_flags:    bool                 # runtime toggle
+# ── graceful shutdown ─────────────────────────────────────────────────────────
 
+STOP = False
+
+
+def handle_sigint(signum, frame):
+    global STOP
+    if STOP:
+        print("\n[!] second ctrl-c; exiting hard")
+        sys.exit(130)
+    STOP = True
+    print("\n[!] ctrl-c caught — finishing in-flight chunks, then stopping...")
+
+
+# ── validation ────────────────────────────────────────────────────────────────
 
 def validate_remote_config(model: str) -> None:
     """
     Enforce the non-local setup.
 
-    This prevents accidentally running:
-        --model ollama:...
-    or:
-        MB_EMBED_PROVIDER=ollama
+    Prevents accidentally running --model ollama:... or MB_EMBED_PROVIDER=ollama.
     """
-
     if model.startswith("ollama:"):
         raise RuntimeError(
             "Local Ollama model requested, but this runner is configured for remote use. "
@@ -129,7 +121,7 @@ def validate_target_collection(name: str) -> str:
     return cleaned
 
 
-# ──────────────────────────────────────── flag persistence ───────────────────
+# ── flag persistence ──────────────────────────────────────────────────────────
 
 def ensure_flag_indexes(target_collection: str) -> None:
     """Create payload indexes for loop flag fields. Idempotent."""
@@ -147,9 +139,8 @@ def ensure_flag_indexes(target_collection: str) -> None:
 
 def persist_flags(point_id: str, decision: str, target_collection: str) -> None:
     """
-    Merge loop decision flags onto an existing meta_reflections point.
-    Uses set_payload so no existing fields are touched.
-    Non-blocking (?wait=false).
+    Merge loop decision flags onto an existing reflection point.
+    Uses set_payload so no existing fields are touched. Non-blocking.
     """
     rf.qdrant(
         "POST",
@@ -166,14 +157,15 @@ def persist_flags(point_id: str, decision: str, target_collection: str) -> None:
     )
 
 
+# ── evaluate / decide ─────────────────────────────────────────────────────────
+
 def detect_possible_contradiction(reflection: Dict[str, Any]) -> bool:
     """
     First-pass contradiction sniffing.
 
-    This is intentionally simple for now. Later this should compare claims
-    against previous reflections in Qdrant, not just inspect one reflection.
+    Intentionally simple. Later this should compare claims against previous
+    reflections in Qdrant, not just inspect one reflection.
     """
-
     claims = reflection.get("claims") or []
 
     contradiction_markers = [
@@ -191,280 +183,262 @@ def detect_possible_contradiction(reflection: Dict[str, Any]) -> bool:
 
 
 def evaluate_reflection(reflection: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Decide whether the reflection has enough signal to matter.
-    """
-
+    """Decide whether the reflection has enough signal to matter."""
     confidence = float(reflection.get("reflection_confidence") or 0.0)
-    concepts = reflection.get("concepts") or []
-    claims = reflection.get("claims") or []
-    questions = reflection.get("questions") or []
-    echoes = reflection.get("echoes") or []
-
-    concept_count = len(concepts)
-    claim_count = len(claims)
-    question_count = len(questions)
-    echo_count = len(echoes)
-
-    has_possible_contradiction = detect_possible_contradiction(reflection)
+    concepts   = reflection.get("concepts") or []
+    claims     = reflection.get("claims") or []
+    questions  = reflection.get("questions") or []
+    echoes     = reflection.get("echoes") or []
 
     is_interesting = (
         confidence >= 0.60
-        or claim_count >= 3
-        or concept_count >= 4
-        or question_count >= 2
-        or echo_count >= 2
+        or len(claims) >= 3
+        or len(concepts) >= 4
+        or len(questions) >= 2
+        or len(echoes) >= 2
     )
 
     return {
         "confidence": confidence,
-        "concept_count": concept_count,
-        "claim_count": claim_count,
-        "question_count": question_count,
-        "echo_count": echo_count,
+        "concept_count": len(concepts),
+        "claim_count": len(claims),
+        "question_count": len(questions),
+        "echo_count": len(echoes),
         "is_interesting": is_interesting,
-        "has_possible_contradiction": has_possible_contradiction,
+        "has_possible_contradiction": detect_possible_contradiction(reflection),
     }
 
 
 def decide_next_action(evaluation: Dict[str, Any]) -> str:
-    """
-    Convert evaluation into an action label.
-    """
-
+    """Convert evaluation into an action label."""
     if evaluation.get("has_possible_contradiction"):
         return "track_contradiction"
-
     if evaluation.get("is_interesting"):
         return "store_interesting"
-
     return "continue_scan"
 
 
-class ReflectLoopRuntime:
+# ── worker ────────────────────────────────────────────────────────────────────
+
+def reflection_point_id(chunk: rf.Chunk) -> str:
+    """Derive the reflection point ID the same way rf.upsert_reflection does."""
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"reflection:{chunk.source_collection}:{chunk.point_id}",
+    ))
+
+
+def process_one(
+    chunk: rf.Chunk,
+    model: str,
+) -> Tuple[rf.Chunk, Optional[Dict[str, Any]], str, Optional[str]]:
     """
-    Holds runtime-only objects that do not belong directly in the LangGraph state,
-    such as the chunk iterator.
+    Reflect on one chunk and upsert the result.
+    Returns (chunk, reflection|None, point_id, error|None).
+    Runs on worker threads; keep it side-effect-contained.
     """
-
-    def __init__(self, limit: int):
-        self.limit = limit
-        self.source_collections = rf.resolve_source_collections()
-        self.skip = rf.existing_reflection_ids(self.source_collections)
-        self.chunk_iter = rf.iter_chunks(self.source_collections, self.skip)
-
-    def get_next_chunk(self) -> Optional[rf.Chunk]:
-        try:
-            return next(self.chunk_iter)
-        except StopIteration:
-            return None
+    try:
+        reflection = rf.reflect_on_chunk(chunk, model)
+        vectors    = rf.reflection_vectors(reflection)
+        rf.upsert_reflection(chunk, reflection, vectors)
+        return chunk, reflection, reflection_point_id(chunk), None
+    except Exception as exc:
+        return chunk, None, "", f"{type(exc).__name__}: {exc}"
 
 
-def build_graph(runtime: ReflectLoopRuntime, target_collection: str):
+# ── reporting ─────────────────────────────────────────────────────────────────
+
+def print_step(
+    stats: Dict[str, Any],
+    chunk: rf.Chunk,
+    evaluation: Dict[str, Any],
+    decision: str,
+    remaining: int,
+    t0: float,
+) -> None:
+    processed = stats["processed"]
+    elapsed   = time.time() - t0
+    rate      = processed / elapsed if elapsed > 0 else 0.0
+    eta_min   = ((remaining - processed) / rate / 60) if rate > 0 else 0.0
+
+    icon = DECISION_ICONS.get(decision, "?")
+    print(
+        f"[{processed}/{remaining}] ✓ {chunk.source_file} "
+        f"p{chunk.page} c{chunk.chunk_index} | "
+        f"{icon} {decision} | "
+        f"conf={evaluation['confidence']:.3f} "
+        f"claims={evaluation['claim_count']} "
+        f"concepts={evaluation['concept_count']} | "
+        f"{rate:.1f}/s eta {eta_min:.0f}m"
+    )
+
+
+def print_summary(stats: Dict[str, Any], target_collection: str, elapsed: float) -> None:
+    print("\n[done]")
+    print(f"  target:          {target_collection}")
+    print(f"  processed:       {stats['processed']}")
+    print(f"  skipped:         {stats['skipped']}")
+    print(f"  errors:          {stats['errors']}")
+    print(f"  interesting:     {stats['interesting']}")
+    print(f"  contradictions:  {stats['contradictions']}")
+    print(f"  flags_written:   {stats['flags_written']}")
+    print(f"  elapsed:         {elapsed / 60:.1f}m")
+
+    by_tone: Dict[str, int] = stats["by_tone"]
+    if by_tone:
+        tones = ", ".join(f"{k or '(none)'}={v}" for k, v in
+                          sorted(by_tone.items(), key=lambda kv: -kv[1]))
+        print(f"  by_tone:         {tones}")
+
+    by_source: Dict[str, int] = stats["by_source"]
+    if by_source:
+        top = sorted(by_source.items(), key=lambda kv: -kv[1])[:8]
+        srcs = ", ".join(f"{k}={v}" for k, v in top)
+        more = len(by_source) - len(top)
+        suffix = f" (+{more} more)" if more > 0 else ""
+        print(f"  by_source:       {srcs}{suffix}")
+
+    if stats["interesting"] > 0:
+        print(f"\n[flags] query interesting reflections:")
+        print(f'  filter: {{"must": [{{"key": "{FLAG_INTERESTING}", "match": {{"value": true}}}}]}}')
+    if stats["contradictions"] > 0:
+        print(f"\n[flags] query contradiction-flagged reflections:")
+        print(f'  filter: {{"must": [{{"key": "{FLAG_CONTRADICTION}", "match": {{"value": true}}}}]}}')
+
+
+# ── reflag existing reflections ──────────────────────────────────────────────
+
+def reflag_existing(
+    target_collection: str,
+    do_persist_flags: bool,
+    quiet: bool,
+    batch_size: int = 500,
+) -> Dict[str, Any]:
     """
-    Build the LangGraph loop:
+    Scroll meta_reflections and backfill loop_* flags on points that are
+    missing them (pre-date the flag persistence work).
 
-        get_chunk -> reflect -> evaluate -> decide -> act -> get_chunk/end
-
-    Important fix:
-        If get_chunk marks the run as done, route directly to END instead of
-        walking through reflect/evaluate/act with an empty or stale chunk.
+    No LLM calls — evaluates the existing payload fields only.
+    Uses the same evaluate_reflection / decide_next_action logic as the
+    main loop so flags are consistent.
     """
+    print(f"\n[reflag] scanning {target_collection} for unflagged points...")
 
-    graph = StateGraph(LoopState)
+    stats: Dict[str, Any] = {
+        "total": 0,
+        "already_done": 0,
+        "interesting": 0,
+        "contradictions": 0,
+        "continue_scan": 0,
+        "written": 0,
+        "errors": 0,
+    }
 
-    def get_chunk_node(state: LoopState) -> LoopState:
-        state["reflection"]       = {}
-        state["evaluation"]       = {}
-        state["decision"]         = ""
-        state["last_error"]       = ""
-        state["current_point_id"] = None
+    offset = None
+    batch = []  # list of (point_id, decision)
 
-        if state.get("processed", 0) >= state.get("limit", runtime.limit):
-            state["done"]          = True
-            state["current_chunk"] = None
-            return state
-
-        chunk = runtime.get_next_chunk()
-        if chunk is None:
-            state["done"]          = True
-            state["current_chunk"] = None
-            return state
-
-        state["current_chunk"] = chunk
-        state["done"]          = False
-        return state
-
-    def route_after_get_chunk(state: LoopState) -> str:
-        return "end" if state.get("done") else "reflect"
-
-    def reflect_node(state: LoopState) -> LoopState:
-        chunk = state.get("current_chunk")
-        model = state.get("model") or rf.DEFAULT_MODEL
-
-        if chunk is None:
-            state["done"] = True
-            return state
-
-        try:
-            reflection = rf.reflect_on_chunk(chunk, model)
-            vectors    = rf.reflection_vectors(reflection)
-            rf.upsert_reflection(chunk, reflection, vectors)
-
-            # Derive point ID the same way upsert_reflection does — no round-trip needed.
-            import uuid
-            point_id = str(uuid.uuid5(
-                uuid.NAMESPACE_URL,
-                f"reflection:{chunk.source_collection}:{chunk.point_id}",
-            ))
-
-            state["reflection"]       = reflection
-            state["current_point_id"] = point_id
-            state["last_error"]       = ""
-
-        except Exception as exc:
-            state["errors"]           = state.get("errors", 0) + 1
-            state["last_error"]       = f"{type(exc).__name__}: {exc}"
-            state["reflection"]       = {}
-            state["current_point_id"] = None
-
-        return state
-
-    def evaluate_node(state: LoopState) -> LoopState:
-        reflection = state.get("reflection") or {}
-
-        if not reflection:
-            state["evaluation"] = {
-                "confidence": 0.0,
-                "concept_count": 0,
-                "claim_count": 0,
-                "question_count": 0,
-                "echo_count": 0,
-                "is_interesting": False,
-                "has_possible_contradiction": False,
-            }
-            return state
-
-        state["evaluation"] = evaluate_reflection(reflection)
-        return state
-
-    def decide_node(state: LoopState) -> LoopState:
-        evaluation = state.get("evaluation") or {}
-        state["decision"] = decide_next_action(evaluation)
-        return state
-
-    def act_node(state: LoopState) -> LoopState:
-        reflection = state.get("reflection") or {}
-        decision   = state.get("decision", "continue_scan")
-        point_id   = state.get("current_point_id")
-
-        state.setdefault("history",        [])
-        state.setdefault("interesting",    [])
-        state.setdefault("contradictions", [])
-        state.setdefault("flags_written",  0)
-
-        if reflection:
-            state["history"].append(reflection)
-        if decision == "store_interesting" and reflection:
-            state["interesting"].append(reflection)
-        if decision == "track_contradiction" and reflection:
-            state["contradictions"].append(reflection)
-
-        # ── persist flags back to the reflection point in Qdrant ──────────────
-        # Written for ALL decisions so downstream can filter by loop_decision.
-        # Best-effort — a write failure never kills the loop.
-        if state.get("persist_flags", True) and point_id and reflection:
+    def flush_batch() -> None:
+        if not batch or not do_persist_flags:
+            stats["written"] += len(batch)
+            batch.clear()
+            return
+        for point_id, decision in batch:
             try:
                 persist_flags(point_id, decision, target_collection)
-                state["flags_written"] = state["flags_written"] + 1
+                stats["written"] += 1
             except Exception as exc:
-                print(f"    [flag] write failed for {point_id}: {exc}")
+                stats["errors"] += 1
+                if not quiet:
+                    print(f"  [flag] write failed for {point_id}: {exc}")
+        batch.clear()
 
-        state["processed"] = state.get("processed", 0) + 1
-        return state
+    while True:
+        body: Dict[str, Any] = {
+            "limit": 250,
+            "with_payload": True,
+            "with_vector": False,
+        }
+        if offset is not None:
+            body["offset"] = offset
 
-    def route_after_act(state: LoopState) -> str:
-        if state.get("processed", 0) >= state.get("limit", runtime.limit):
-            return "end"
-        return "continue"
+        result = rf.qdrant(
+            "POST",
+            f"/collections/{target_collection}/points/scroll",
+            body,
+        ).get("result", {})
 
-    graph.add_node("get_chunk", get_chunk_node)
-    graph.add_node("reflect", reflect_node)
-    graph.add_node("evaluate", evaluate_node)
-    graph.add_node("decide", decide_node)
-    graph.add_node("act", act_node)
+        points = result.get("points", [])
+        offset = result.get("next_page_offset")
 
-    graph.set_entry_point("get_chunk")
+        for pt in points:
+            stats["total"] += 1
+            pl = pt.get("payload") or {}
 
-    graph.add_conditional_edges(
-        "get_chunk",
-        route_after_get_chunk,
-        {
-            "reflect": "reflect",
-            "end": END,
-        },
-    )
-    graph.add_edge("reflect", "evaluate")
-    graph.add_edge("evaluate", "decide")
-    graph.add_edge("decide", "act")
-    graph.add_conditional_edges(
-        "act",
-        route_after_act,
-        {
-            "continue": "get_chunk",
-            "end": END,
-        },
-    )
+            # already flagged — skip
+            if "loop_decision" in pl:
+                stats["already_done"] += 1
+                continue
 
-    return graph.compile()
+            # reconstruct a minimal reflection dict from stored payload
+            reflection = {
+                "reflection_confidence": pl.get("reflection_confidence", 0.0),
+                "concepts":  pl.get("concepts")  or [],
+                "claims":    pl.get("claims")    or [],
+                "questions": pl.get("questions") or [],
+                "echoes":    pl.get("echoes")    or [],
+            }
+
+            evaluation = evaluate_reflection(reflection)
+            decision   = decide_next_action(evaluation)
+
+            if decision == "store_interesting":
+                stats["interesting"] += 1
+            elif decision == "track_contradiction":
+                stats["contradictions"] += 1
+            else:
+                stats["continue_scan"] += 1
+
+            point_id = str(pt["id"])
+            batch.append((point_id, decision))
+
+            if len(batch) >= batch_size:
+                flush_batch()
+                if not quiet:
+                    print(
+                        f"  ↳ flagged {stats['written']} so far "
+                        f"(interesting={stats['interesting']} "
+                        f"contradiction={stats['contradictions']} "
+                        f"scan={stats['continue_scan']} "
+                        f"errors={stats['errors']})"
+                    )
+
+        if not offset:
+            break
+
+    flush_batch()
+
+    print(f"\n[reflag] complete")
+    print(f"  total scanned:    {stats['total']}")
+    print(f"  already flagged:  {stats['already_done']}")
+    print(f"  newly flagged:    {stats['written']}")
+    print(f"    interesting:    {stats['interesting']}")
+    print(f"    contradiction:  {stats['contradictions']}")
+    print(f"    continue_scan:  {stats['continue_scan']}")
+    print(f"  errors:           {stats['errors']}")
+    return stats
 
 
-def print_step_summary(state: LoopState) -> None:
-    chunk = state.get("current_chunk")
-    evaluation = state.get("evaluation") or {}
-    decision = state.get("decision", "unknown")
-    processed = state.get("processed", 0)
-    errors = state.get("errors", 0)
-    last_error = state.get("last_error", "")
-
-    if chunk is None:
-        return
-
-    source = getattr(chunk, "source_file", "unknown")
-    page = getattr(chunk, "page", 0)
-    chunk_index = getattr(chunk, "chunk_index", 0)
-
-    confidence = float(evaluation.get("confidence", 0.0) or 0.0)
-    claim_count = int(evaluation.get("claim_count", 0) or 0)
-    concept_count = int(evaluation.get("concept_count", 0) or 0)
-
-    decision_icon = {
-        "store_interesting":   "★",
-        "track_contradiction": "⚡",
-        "continue_scan":       "·",
-    }.get(decision, "?")
-
-    status = "✗" if last_error else "✓"
-
-    print(
-        f"[{processed}] {status} {source} "
-        f"p{page} c{chunk_index} | "
-        f"{decision_icon} {decision} | "
-        f"conf={confidence:.3f} claims={claim_count} concepts={concept_count} | "
-        f"errs={errors}"
-    )
-
-    if last_error:
-        print(f"    error: {last_error}")
-
+# ── main loop ─────────────────────────────────────────────────────────────────
 
 def run_once(
     args: argparse.Namespace,
     model: str,
     target_collection: str,
     from_scratch: bool,
-    persist_flags: bool,
-) -> tuple[LoopState, float]:
+    do_persist_flags: bool,
+) -> Dict[str, Any]:
+    global STOP
+    STOP = False
 
     rf.CURRENT_MODEL     = model
     rf.TARGET_COLLECTION = target_collection
@@ -474,122 +448,190 @@ def run_once(
     print(f"  qdrant:         {rf.QDRANT_URL}")
     print(f"  embed_provider: {rf.EMBED_PROVIDER}")
     print(f"  embed_model:    {rf.EMBED_MODEL}")
-    print(f"  target:         {rf.TARGET_COLLECTION}")
+    print(f"  target:         {target_collection}")
+    print(f"  workers:        {args.workers}")
+    print(f"  min_text:       {args.min_text}")
     print(f"  goal:           {args.goal}")
-    print(f"  persist_flags:  {persist_flags}")
+    print(f"  persist_flags:  {do_persist_flags}")
 
     rf.ensure_target_collection(from_scratch)
     rf.ensure_target_indexes()
 
-    if persist_flags:
+    if do_persist_flags:
         print("[init] ensuring loop flag indexes...")
         ensure_flag_indexes(target_collection)
 
-    runtime = ReflectLoopRuntime(limit=args.limit)
-    app     = build_graph(runtime, target_collection)
+    source_collections = rf.resolve_source_collections()
+    skip = rf.existing_reflection_ids(source_collections)
+    print(f"[resume] {len(skip)} chunks already reflected — will skip")
 
-    initial_state: LoopState = {
-        "goal":             args.goal,
-        "model":            model,
-        "current_chunk":    None,
-        "current_point_id": None,
-        "reflection":       {},
-        "evaluation":       {},
-        "decision":         "",
-        "history":          [],
-        "interesting":      [],
-        "contradictions":   [],
-        "processed":        0,
-        "errors":           0,
-        "flags_written":    0,
-        "limit":            args.limit,
-        "done":             False,
-        "last_error":       "",
-        "persist_flags":    persist_flags,
+    total = 0
+    for source_collection in source_collections:
+        count = rf.qdrant(
+            "POST",
+            f"/collections/{source_collection}/points/count",
+            {"exact": True},
+        ).get("result", {}).get("count", 0)
+        total += int(count or 0)
+    remaining = max(0, total - len(skip))
+    if args.limit > 0:
+        remaining = min(remaining, args.limit)
+    print(f"[plan]   total={total}, targeting up to {remaining} this run")
+
+    stats: Dict[str, Any] = {
+        "processed": 0,
+        "skipped": 0,
+        "errors": 0,
+        "interesting": 0,
+        "contradictions": 0,
+        "flags_written": 0,
+        "by_tone": {},
+        "by_source": {},
+        "last_error": "",
     }
 
-    print("\n[loop] starting\n")
-    t0           = time.time()
-    final_state: LoopState = initial_state
+    source_ids = rf.load_source_id_map()
+    chunks = rf.iter_chunks(source_collections, skip, source_ids)
 
-    for state_update in app.stream(initial_state):
-        for node_name, state in state_update.items():
-            final_state = state
-            if not args.quiet and node_name == "act":
-                print_step_summary(final_state)
+    def next_chunk() -> Optional[rf.Chunk]:
+        """Pull the next chunk, applying the cheap-skip guard."""
+        while True:
+            try:
+                chunk = next(chunks)
+            except StopIteration:
+                return None
+            if len(chunk.text.strip()) < args.min_text:
+                stats["skipped"] += 1
+                continue
+            return chunk
+
+    print("\n[loop] starting\n")
+    t0 = time.time()
+    submitted = 0
+
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        in_flight: dict = {}
+
+        def submit_next() -> bool:
+            nonlocal submitted
+            if STOP:
+                return False
+            if args.limit > 0 and submitted >= args.limit:
+                return False
+            chunk = next_chunk()
+            if chunk is None:
+                return False
+            fut = pool.submit(process_one, chunk, model)
+            in_flight[fut] = chunk
+            submitted += 1
+            return True
+
+        for _ in range(max(1, args.workers)):
+            if not submit_next():
+                break
+
+        while in_flight:
+            done, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED)
+
+            for fut in done:
+                in_flight.pop(fut, None)
+                chunk, reflection, point_id, err = fut.result()
+                stats["processed"] += 1
+
+                if err:
+                    stats["errors"] += 1
+                    stats["last_error"] = err
+                    if not args.quiet:
+                        print(
+                            f"[{stats['processed']}/{remaining}] ✗ {chunk.source_file} "
+                            f"p{chunk.page} c{chunk.chunk_index}  {err}"
+                        )
+                    continue
+
+                evaluation = evaluate_reflection(reflection or {})
+                decision   = decide_next_action(evaluation)
+
+                if decision == "store_interesting":
+                    stats["interesting"] += 1
+                elif decision == "track_contradiction":
+                    stats["contradictions"] += 1
+
+                tone = str((reflection or {}).get("tone") or "")
+                stats["by_tone"][tone] = stats["by_tone"].get(tone, 0) + 1
+                src = chunk.source_id or chunk.source_file or "unknown"
+                stats["by_source"][src] = stats["by_source"].get(src, 0) + 1
+
+                # Persist loop decision flags for ALL decisions so downstream
+                # can filter by loop_decision. Best-effort — a flag-write
+                # failure never kills the loop.
+                if do_persist_flags and point_id:
+                    try:
+                        persist_flags(point_id, decision, target_collection)
+                        stats["flags_written"] += 1
+                    except Exception as exc:
+                        print(f"    [flag] write failed for {point_id}: {exc}")
+
+                if not args.quiet:
+                    print_step(stats, chunk, evaluation, decision, remaining, t0)
+
+            while len(in_flight) < args.workers:
+                if not submit_next():
+                    break
 
     elapsed = time.time() - t0
-
-    interesting_count   = len(final_state.get("interesting",   []))
-    contradiction_count = len(final_state.get("contradictions",[]))
-    flags_written       = final_state.get("flags_written", 0)
-
-    print("\n[done]")
-    print(f"  target:          {rf.TARGET_COLLECTION}")
-    print(f"  processed:       {final_state.get('processed', 0)}")
-    print(f"  errors:          {final_state.get('errors', 0)}")
-    print(f"  interesting:     {interesting_count}")
-    print(f"  contradictions:  {contradiction_count}")
-    print(f"  flags_written:   {flags_written}")
-    print(f"  elapsed:         {elapsed / 60:.1f}m")
-
-    if interesting_count > 0:
-        print(f"\n[flags] query interesting reflections:")
-        print(f'  filter: {{"must": [{{"key": "loop_interesting", "match": {{"value": true}}}}]}}')
-    if contradiction_count > 0:
-        print(f"\n[flags] query contradiction-flagged reflections:")
-        print(f'  filter: {{"must": [{{"key": "loop_contradiction", "match": {{"value": true}}}}]}}')
-
-    return final_state, elapsed
+    print_summary(stats, target_collection, elapsed)
+    return stats
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stateful LangGraph reflection loop for Meta-Bridge"
+        description="Plain reflection loop for Meta-Bridge (evaluate/decide/flag)"
     )
-
     parser.add_argument(
         "--model",
         default=rf.DEFAULT_MODEL,
         help=f"OpenRouter model to use. Default: {rf.DEFAULT_MODEL}",
     )
-
     parser.add_argument(
         "--goal",
         default="Explore conceptual structure and surface interesting metaphysical claims",
         help="High-level research goal for this loop run",
     )
-
     parser.add_argument(
         "--limit",
         type=int,
         default=25,
-        help="Maximum number of chunks to process",
+        help="Maximum number of chunks to process (0 = no limit)",
     )
-
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=2,
+        help="Concurrent reflect+embed workers. Default: 2",
+    )
+    parser.add_argument(
+        "--min-text",
+        type=int,
+        default=DEFAULT_MIN_TEXT_LEN,
+        help=f"Skip chunks with fewer characters than this. Default: {DEFAULT_MIN_TEXT_LEN}",
+    )
     parser.add_argument(
         "--target-collection",
         default=DEFAULT_TARGET_COLLECTION,
-        help=(
-            "Qdrant collection to write reflections into. "
-            f"Default: {DEFAULT_TARGET_COLLECTION}"
-        ),
+        help=f"Qdrant collection to write reflections into. Default: {DEFAULT_TARGET_COLLECTION}",
     )
-
     parser.add_argument(
         "--loop-interval",
         type=float,
         default=0.0,
         help="Seconds between repeated runs. 0 disables timer loop.",
     )
-
     parser.add_argument(
         "--max-loops",
         type=int,
         default=1,
         help="How many runs to execute when --loop-interval > 0 (0 = infinite).",
     )
-
     parser.add_argument(
         "--from-scratch",
         action="store_true",
@@ -605,31 +647,61 @@ def main() -> int:
         action="store_true",
         help="Disable writing loop decision flags back to Qdrant",
     )
+    parser.add_argument(
+        "--reflag-unflagged",
+        action="store_true",
+        help=(
+            "Scan target collection and backfill loop_* flags on points that "
+            "don't have them yet. No LLM calls — evaluates existing payload. "
+            "Runs once and exits."
+        ),
+    )
+    parser.add_argument(
+        "--reflag-batch",
+        type=int,
+        default=500,
+        help="Batch size for --reflag-unflagged set_payload calls. Default: 500",
+    )
 
     args = parser.parse_args()
 
     model = args.model.strip()
-
     if not model:
         raise RuntimeError("--model cannot be empty")
-
     if args.limit < 0:
         raise RuntimeError("--limit must be >= 0")
-
+    if args.workers < 1:
+        raise RuntimeError("--workers must be >= 1")
+    if args.min_text < 0:
+        raise RuntimeError("--min-text must be >= 0")
     if args.loop_interval < 0:
         raise RuntimeError("--loop-interval must be >= 0")
-
     if args.max_loops < 0:
         raise RuntimeError("--max-loops must be >= 0")
 
     target_collection = validate_target_collection(args.target_collection)
     validate_remote_config(model)
 
-    persist_flags = not args.no_persist_flags
+    do_persist_flags = not args.no_persist_flags
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    # --reflag-unflagged: backfill mode, no LLM calls, runs once and exits
+    if args.reflag_unflagged:
+        if do_persist_flags:
+            print("[init] ensuring loop flag indexes...")
+            ensure_flag_indexes(args.target_collection.strip())
+        stats = reflag_existing(
+            target_collection=args.target_collection.strip(),
+            do_persist_flags=do_persist_flags,
+            quiet=args.quiet,
+            batch_size=args.reflag_batch,
+        )
+        return 0 if stats["errors"] == 0 else 1
 
     if args.loop_interval <= 0:
-        final_state, _ = run_once(args, model, target_collection, args.from_scratch, persist_flags)
-        return 0 if final_state.get("errors", 0) == 0 else 1
+        stats = run_once(args, model, target_collection, args.from_scratch, do_persist_flags)
+        return 0 if stats["errors"] == 0 else 1
 
     run_count    = 0
     total_errors = 0
@@ -637,13 +709,15 @@ def main() -> int:
     while True:
         run_count += 1
         print(f"\n[timer] run {run_count} starting")
-        final_state, _ = run_once(
+        stats = run_once(
             args, model, target_collection,
             args.from_scratch if run_count == 1 else False,
-            persist_flags,
+            do_persist_flags,
         )
-        total_errors += int(final_state.get("errors", 0) or 0)
+        total_errors += int(stats["errors"] or 0)
 
+        if STOP:
+            break
         if args.max_loops > 0 and run_count >= args.max_loops:
             break
 

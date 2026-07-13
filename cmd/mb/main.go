@@ -76,7 +76,10 @@ Env:
   MB_CATALOG_PATH        path to sources.yaml (default: ./sources.yaml)
   MB_GRAPHABILITY_INDEX  path to graphability index JSON (default: ./graphability_index.json)
   MB_GRAPHABILITY_MIN    minimum score to extract: very_high|high|medium (default: medium)
-  MB_SKIP_GRAPHABILITY   set to 1 to disable graphability scoring (scan everything)`)
+  MB_SKIP_GRAPHABILITY   set to 1 to disable graphability scoring (scan everything)
+  MB_SKIP_OCR            set to 1 to disable the OCR fallback for scanned PDFs
+  MB_OCR_LANG            tesseract language(s) for OCR (default: eng)
+  MB_OCR_ARGS            extra args appended to ocrmypdf`)
 }
 
 func cmdIngest(path string) error {
@@ -422,11 +425,26 @@ func resolveSourceID(meta sourceMeta, cat *catalog, path string) string {
 }
 
 // extractText reads the source file, converting PDF to text if needed.
+// Image-only (scanned) PDFs are detected and routed through OCR automatically.
 func extractText(path string) (string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".pdf":
-		return runPdftotext(path)
+		raw, err := runPdftotext(path)
+		if err != nil {
+			return "", err
+		}
+		if isScannedPDF(raw) {
+			if os.Getenv("MB_SKIP_OCR") == "1" {
+				return "", fmt.Errorf("no text layer in %s (scanned PDF) and MB_SKIP_OCR=1", path)
+			}
+			log.Printf("      no text layer detected (scanned PDF) — running OCR fallback")
+			raw, err = ocrExtract(path)
+			if err != nil {
+				return "", fmt.Errorf("ocr fallback: %w", err)
+			}
+		}
+		return normalizeExtractedText(raw), nil
 	case ".txt", ".md", "":
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -449,7 +467,86 @@ func runPdftotext(path string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("pdftotext: %w (stderr: %s)", err, stderr.String())
 	}
-	return normalizeExtractedText(stdout.String()), nil
+	return stdout.String(), nil
+}
+
+// isScannedPDF returns true when pdftotext output is effectively empty —
+// the signature of an image-only (scanned) PDF. Pages are split on form
+// feeds; a page "has text" if it carries at least 50 alphanumeric runes.
+// If fewer than 10% of pages have text, we call it a scan.
+func isScannedPDF(raw string) bool {
+	pages := strings.Split(raw, "\f")
+	if len(pages) == 0 {
+		return false
+	}
+	textPages := 0
+	for _, p := range pages {
+		n := 0
+		for _, r := range p {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				n++
+				if n >= 50 {
+					break
+				}
+			}
+		}
+		if n >= 50 {
+			textPages++
+		}
+	}
+	return float64(textPages) < 0.10*float64(len(pages))
+}
+
+// ocrExtract OCRs a scanned PDF via ocrmypdf and returns the raw sidecar text.
+//
+// Behaviour:
+//   - If a previously OCR'd sibling exists (<stem>-ocr.pdf convention), reuse
+//     it instead of re-running OCR.
+//   - Otherwise run ocrmypdf, writing the OCR'd PDF sibling (cached for future
+//     runs) plus a sidecar text file that becomes the extraction result.
+func ocrExtract(path string) (string, error) {
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(path, ext)
+	ocrPDF := stem + "-ocr.pdf"
+
+	if _, err := os.Stat(ocrPDF); err == nil {
+		log.Printf("      reusing existing OCR sibling: %s", ocrPDF)
+		return runPdftotext(ocrPDF)
+	}
+
+	if _, err := exec.LookPath("ocrmypdf"); err != nil {
+		return "", fmt.Errorf("scanned PDF but ocrmypdf not on PATH (install: sudo apt install ocrmypdf, or pipx install ocrmypdf): %w", err)
+	}
+
+	sidecar, err := os.CreateTemp("", "mb-ocr-*.txt")
+	if err != nil {
+		return "", fmt.Errorf("create sidecar temp: %w", err)
+	}
+	sidecarPath := sidecar.Name()
+	sidecar.Close()
+	defer os.Remove(sidecarPath)
+
+	lang := envOr("MB_OCR_LANG", "eng")
+	args := []string{"--skip-text", "--deskew", "-l", lang, "--sidecar", sidecarPath}
+	if extra := os.Getenv("MB_OCR_ARGS"); extra != "" {
+		args = append(args, strings.Fields(extra)...)
+	}
+	args = append(args, path, ocrPDF)
+
+	log.Printf("      ocrmypdf %s", strings.Join(args, " "))
+	cmd := exec.Command("ocrmypdf", args...)
+	cmd.Stdout = os.Stderr // progress/noise to console; extraction comes from the sidecar
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ocrmypdf: %w", err)
+	}
+	log.Printf("      OCR complete — wrote %s", ocrPDF)
+
+	b, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		return "", fmt.Errorf("read sidecar: %w", err)
+	}
+	return string(b), nil
 }
 
 // normalizeExtractedText cleans up raw pdftotext output for reliable chunking.
